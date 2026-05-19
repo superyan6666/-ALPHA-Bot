@@ -1,3 +1,4 @@
+
 import os
 import json
 import time
@@ -65,9 +66,10 @@ def safe_request_get(url: str, timeout: int = 8, max_retries: int = 2) -> Option
             return res
         except requests.exceptions.RequestException as e:
             if attempt < max_retries - 1:
+                log.debug(f"请求失败，重试 ({attempt+1}/{max_retries}): {url}")
                 time.sleep(1)
             else:
-                log.warning(f"请求失败: {url} - {e}")
+                log.warning(f"网络请求失败: {url} - {e}")
                 return None
 
 def _today_str() -> str:
@@ -147,7 +149,7 @@ class MacroBrain:
                     pct = float(parts[3])
                     
                     name_map = {"沪深300": "沪深300", "创业板指": "创业板指", 
-                               "上证指数": "上证指数", "深证成指": "深证成指"}
+                              "上证指数": "上证指数", "深证成指": "深证成指"}
                     target_name = name_map.get(name, name)
                     
                     status = MarketStatus.NORMAL
@@ -213,18 +215,33 @@ class MacroBrain:
 
     @staticmethod
     def get_ashare_breadth() -> tuple[dict, list]:
-        breadth = {"up_count": 0, "down_count": 0, "limit_up_count": 0, "limit_down_count": 0}
+        breadth = {"up_count": 0, "down_count": 0, "limit_up_count": 0, "limit_down_count": 0, "volume": 0}
         errors = []
         try:
             df = ak.stock_zh_a_spot_em()
             if df is not None and not df.empty:
                 breadth["up_count"] = int((df['涨跌幅'] > 0).sum())
                 breadth["down_count"] = int((df['涨跌幅'] < 0).sum())
-                breadth["limit_up_count"] = int((df['涨跌幅'] >= 9.9).sum())
-                breadth["limit_down_count"] = int((df['涨跌幅'] <= -9.9).sum())
+                breadth["limit_up_count"] = int((df['涨跌幅'] >= 9.5).sum())
+                breadth["limit_down_count"] = int((df['涨跌幅'] <= -9.5).sum())
+                if '成交额' in df.columns:
+                    breadth["volume"] = df['成交额'].sum()
         except Exception as e:
             errors.append(f"涨跌家数获取失败: {e}")
         return breadth, errors
+
+    @staticmethod
+    def get_southbound_flow() -> tuple[float, str, list]:
+        errors = []
+        try:
+            df = ak.stock_em_hsgt_south_net_flow_in(indicator="港股通（沪）")
+            if df is not None and not df.empty:
+                col = 'value' if 'value' in df.columns else df.columns[-1]
+                today_flow = float(df.iloc[-1][col]) / 1e8
+                return today_flow, "南向资金", errors
+        except Exception as e:
+            errors.append(f"南向资金获取失败: {e}")
+        return 0.0, "", errors
 
 class MacroJudgmentEngine:
     @staticmethod
@@ -234,6 +251,7 @@ class MacroJudgmentEngine:
         loss = -delta.clip(upper=0)
         avg_gain = gain.rolling(window=period).mean()
         avg_loss = loss.rolling(window=period).mean()
+        
         avg_loss = avg_loss.replace(0, 1e-10)
         rs = avg_gain / avg_loss
         rsi = 100 - (100 / (1 + rs))
@@ -261,6 +279,7 @@ class MacroJudgmentEngine:
             download_kwargs = {"period": "6mo"}
             if proxy:
                 download_kwargs["proxy"] = proxy
+                log.info(f"使用代理: {proxy}")
             
             if yf_data is None:
                 tickers = yf.Tickers("^TNX ^VIX ^SKEW HG=F GC=F CL=F ^GSPC 000300.SS")
@@ -337,56 +356,50 @@ class MacroJudgmentEngine:
             
             cgr = (hg / gc) * 100 if gc else 0
             
-            # 指标解读
             interpretations = []
             
-            # 铜金比解读
             cgr_interp = ""
             if cgr > 5.0:
-                cgr_interp = "处于偏高区域（>5），通常对应经济扩张预期偏强"
+                cgr_interp = f"铜金比 **{cgr:.2f}**，处于偏高区域，经济扩张预期偏强"
             elif cgr > 4.0:
-                cgr_interp = "处于中性区间（4~5），工业需求复苏态势尚不稳固"
+                cgr_interp = f"铜金比 **{cgr:.2f}**，处于中性区间，工业需求复苏尚不稳固"
             else:
-                cgr_interp = "处于偏低区域（<4），暗示需求侧仍有压力"
-            interpretations.append(f"铜金比 **{cgr:.2f}**：{cgr_interp}")
+                cgr_interp = f"铜金比 **{cgr:.2f}**，处于偏低区域，暗示需求侧仍有压力"
+            interpretations.append(cgr_interp)
             
-            # VIX解读
             vix_interp = ""
             if vix < 15:
-                vix_interp = "极度贪婪（<15），期权保护成本极低，可能过于乐观"
+                vix_interp = f"VIX **{vix:.1f}**，极度贪婪，期权保护成本极低，可能过于乐观"
             elif vix < 20:
-                vix_interp = "偏贪婪（15~20），市场整体风险偏好较高"
+                vix_interp = f"VIX **{vix:.1f}**，偏贪婪，市场整体风险偏好较高"
             else:
-                vix_interp = "偏谨慎（>20），大资金已在布局对冲，短期需注意波动"
-            interpretations.append(f"VIX **{vix:.1f}**：{vix_interp}")
+                vix_interp = f"VIX **{vix:.1f}**，偏谨慎，大资金已在布局对冲，短期需注意波动"
+            interpretations.append(vix_interp)
             
-            # 美债解读
             tnx_interp = ""
             if tnx > 4.5:
-                tnx_interp = "高位（>4.5%），对全球科技股估值形成持续压制"
+                tnx_interp = f"美10Y收益率 **{tnx:.2f}%**，高位，对全球科技股估值形成持续压制"
             elif tnx > 4.2:
-                tnx_interp = "偏高（4.2~4.5%），风险资产仍承压"
+                tnx_interp = f"美10Y收益率 **{tnx:.2f}%**，偏高，风险资产仍承压"
             elif tnx > 3.8:
-                tnx_interp = "中性（3.8~4.2%），符合历史均值"
+                tnx_interp = f"美10Y收益率 **{tnx:.2f}%**，中性，符合历史均值"
             else:
-                tnx_interp = "偏低（<3.8%），成长股流动性环境友好"
-            interpretations.append(f"美10Y收益率 **{tnx:.2f}%**：{tnx_interp}")
+                tnx_interp = f"美10Y收益率 **{tnx:.2f}%**，偏低，成长股流动性环境友好"
+            interpretations.append(tnx_interp)
             
-            # 人民币解读
             cnh_interp = ""
             if cnh > 7.3:
-                cnh_interp = "弱势（>7.3），外资流出压力较大"
+                cnh_interp = f"离岸人民币 **{cnh:.4f}**，弱势，外资流出压力较大"
             elif cnh > 7.2:
-                cnh_interp = "偏弱（7.2~7.3），关注7.3整数关口"
+                cnh_interp = f"离岸人民币 **{cnh:.4f}**，偏弱，关注7.3整数关口"
             elif cnh > 7.1:
-                cnh_interp = "基本稳定（7.1~7.2），外资流向平稳"
+                cnh_interp = f"离岸人民币 **{cnh:.4f}**，基本稳定，外资流向平稳"
             else:
-                cnh_interp = "偏强（<7.1），外资流入窗口"
-            interpretations.append(f"离岸人民币 **{cnh:.4f}**：{cnh_interp}")
+                cnh_interp = f"离岸人民币 **{cnh:.4f}**，偏强，外资流入窗口"
+            interpretations.append(cnh_interp)
             
-            result["macro"].append(f"**大类资产与汇率**\n> " + "\n> ".join(interpretations))
+            result["macro"].append("\n".join(interpretations))
             
-            # 风险预警
             risk_parts = []
             if vix > 25:
                 risk_parts.append(f"VIX突破25（当前{vix:.1f}），市场恐慌情绪升温")
@@ -396,9 +409,8 @@ class MacroJudgmentEngine:
                 risk_parts.append("美债收益率高位，持续压制风险偏好")
             
             if risk_parts:
-                result["risk_alert"] = "⚠️ **风险提示**: " + "；".join(risk_parts) + "。"
+                result["risk_alert"] = "⚠️ **风险提示**：" + "；".join(risk_parts) + "。"
             
-            # 技术分析
             csi300_name, csi300_desc, csi300_levels, csi300_conf = get_ma_trend('000300.SS')
             gspc_name, gspc_desc, gspc_levels, gspc_conf = get_ma_trend('^GSPC')
             
@@ -412,18 +424,18 @@ class MacroJudgmentEngine:
             
             result["us_tech"] = (
                 f"**标普500** {format_dingtalk_pct(get_mtm_pct('^GSPC'), True)}\n"
-                f"> 趋势: **{gspc_name}**（置信度约{int(gspc_conf*100)}%）\n"
-                f"> 信号: {gspc_desc}\n"
-                f"> RSI: {csi300_rsi:.0f} | 收盘: {gspc_levels.get('close', 0):.0f}\n"
-                f"> 参考: 阻力 {gspc_levels.get('resistance', 0):.0f} / 支撑 {gspc_levels.get('support', 0):.0f}"
+                f"> 趋势：**{gspc_name}**（置信度约{int(gspc_conf*100)}%）\n"
+                f"> 信号：{gspc_desc}\n"
+                f"> RSI：{gspc_rsi:.0f} | 收盘：{gspc_levels.get('close', 0):.0f}\n"
+                f"> 参考：阻力 {gspc_levels.get('resistance', 0):.0f} / 支撑 {gspc_levels.get('support', 0):.0f}"
             )
             
             result["cn_tech"] = (
                 f"**沪深300** {format_dingtalk_pct(get_mtm_pct('000300.SS'), False)}\n"
-                f"> 趋势: **{csi300_name}**（置信度约{int(csi300_conf*100)}%）\n"
-                f"> 信号: {csi300_desc}\n"
-                f"> RSI: {csi300_rsi:.0f} | 收盘: {csi300_levels.get('close', 0):.0f}\n"
-                f"> 参考: 阻力 {csi300_levels.get('resistance', 0):.0f} / 支撑 {csi300_levels.get('support', 0):.0f}"
+                f"> 趋势：**{csi300_name}**（置信度约{int(csi300_conf*100)}%）\n"
+                f"> 信号：{csi300_desc}\n"
+                f"> RSI：{csi300_rsi:.0f} | 收盘：{csi300_levels.get('close', 0):.0f}\n"
+                f"> 参考：阻力 {csi300_levels.get('resistance', 0):.0f} / 支撑 {csi300_levels.get('support', 0):.0f}"
             )
 
         except ImportError:
@@ -453,7 +465,7 @@ class NewsDigest:
             if w in title:
                 score += 10
         
-        t2_words = ["超预期", "指引", "订单", "需求爆发", "上调", "产能", "供不应求", "扭亏", "净利", "暴增", "中标", "合作", "研发", "获批", "新高"]
+        t2_words = ["超预期", "指引", "订单", "需求爆发", "上调", "产能", "供不应求", "扭亏", "净利", "暴增", "中标", "合作", "发布", "研发", "获批", "新高"]
         for w in t2_words:
             if w in title:
                 score += 5
@@ -474,7 +486,6 @@ class NewsDigest:
     def generate_summary(title: str) -> str:
         summaries = []
         
-        # 政策类
         if "工信部" in title or "发改委" in title or "国务院" in title:
             if "人形机器人" in title:
                 summaries.append("政策定调产业化加速，关键零部件（减速器/传感器）及整机龙头有望受益")
@@ -485,13 +496,11 @@ class NewsDigest:
             elif "人工智能" in title or "AI" in title:
                 summaries.append("顶层支持明确，算力基础设施和应用场景双重受益")
         
-        # 业绩类
         if "超预期" in title or "暴增" in title:
             summaries.append("基本面边际改善，盈利预测存在上调空间")
         elif "净利" in title and ("增" in title or "涨" in title):
             summaries.append("业绩表现亮眼，估值性价比凸显")
         
-        # 合作订单类
         if "中标" in title or "订单" in title:
             summaries.append("需求侧持续验证，订单落地支撑业绩预期")
         elif "合作" in title:
@@ -507,7 +516,7 @@ class NewsDigest:
         scored_news = []
         errors = []
         
-        token = os.environ.get("TUSHARE_TOKEN", "").strip()
+        token = os.environ.get('TUSHARE_TOKEN', '').strip()
         if token:
             try:
                 import tushare as ts
@@ -529,10 +538,13 @@ class NewsDigest:
                         scored_news.sort(key=lambda x: x[0], reverse=True)
                         for _, _, time_str, title in scored_news[:limit]:
                             summary = NewsDigest.generate_summary(title)
-                            news_list.append(f"> **[{time_str}]** {title}\n> {summary}" if summary else f"> **[{time_str}]** {title}")
+                            if summary:
+                                news_list.append(f"> **[{time_str}]** {title}\n> {summary}")
+                            else:
+                                news_list.append(f"> **[{time_str}]** {title}")
                         return news_list, errors
             except Exception as e:
-                errors.append(f"Tushare失败: {e}")
+                errors.append(f"Tushare新闻失败: {e}")
 
         try:
             url = "https://feed.mix.sina.com.cn/api/roll/get?pageid=153&lid=2509&k=&num=80&page=1"
@@ -554,7 +566,10 @@ class NewsDigest:
                     scored_news.sort(key=lambda x: x[0], reverse=True)
                     for _, _, time_str, title in scored_news[:limit]:
                         summary = NewsDigest.generate_summary(title)
-                        news_list.append(f"> **[{time_str}]** {title}\n> {summary}" if summary else f"> **[{time_str}]** {title}")
+                        if summary:
+                            news_list.append(f"> **[{time_str}]** {title}\n> {summary}")
+                        else:
+                            news_list.append(f"> **[{time_str}]** {title}")
                     return news_list, errors
         except Exception as e:
             errors.append(f"新浪新闻失败: {e}")
@@ -596,6 +611,9 @@ class DataCollector:
         def fetch_usd():
             return MacroBrain.get_usd_index()
         
+        def fetch_southbound():
+            return MacroBrain.get_southbound_flow()
+        
         with ThreadPoolExecutor(max_workers=8) as executor:
             futures = {
                 'ashare': executor.submit(fetch_ashare),
@@ -606,6 +624,7 @@ class DataCollector:
                 'hot': executor.submit(fetch_hot),
                 'breadth': executor.submit(fetch_breadth),
                 'usd': executor.submit(fetch_usd),
+                'southbound': executor.submit(fetch_southbound)
             }
             
             for name, future in futures.items():
@@ -633,6 +652,10 @@ class DataCollector:
                     elif name == 'usd':
                         data.extra['usd'] = result[0]
                         data.status["warnings"].extend([f"美元: {w}" for w in result[1]])
+                    elif name == 'southbound':
+                        data.extra['southbound'] = result[0]
+                        data.extra['southbound_desc'] = result[1]
+                        data.status["warnings"].extend([f"南向: {w}" for w in result[2]])
                 except FuturesTimeoutError:
                     data.status["errors"].append(f"{name} 获取超时")
                 except Exception as e:
@@ -645,36 +668,48 @@ class BriefingRenderer:
     def generate_key_points(data: MarketData) -> str:
         points = []
         
-        # 美债
         judgments = data.judgments
         if "macro" in judgments and judgments["macro"]:
             macro_text = "\n".join(judgments["macro"])
-            if "4.5" in macro_text or tnx_above := "高" in macro_text:
+            if "压制" in macro_text or "高位" in macro_text:
                 points.append("美债收益率偏高，对全球风险资产形成压制")
-            elif "3.8" in macro_text:
+            elif "偏低" in macro_text:
                 points.append("美债收益率回落，流动性环境友好")
         
-        # 北向资金
         flow_amt, _ = data.northbound_flow
         if flow_amt > 50:
-            points.append(f"北向资金大幅净流入（+{flow_amt:.0f}亿元），外资情绪回暖")
+            points.append(f"北向资金大幅净流入（+{flow_amt:.0f}亿），外资情绪回暖")
         elif flow_amt < -50:
-            points.append(f"北向资金净流出（{flow_amt:.0f}亿元），外资偏谨慎")
+            points.append(f"北向资金净流出（{flow_amt:.0f}亿），外资偏谨慎")
         
-        # 涨跌家数
+        southbound = data.extra.get('southbound', 0)
+        if southbound > 30:
+            points.append(f"南向资金净流入（+{southbound:.0f}亿），内地资金抄底港股")
+        
         breadth = data.extra.get('breadth', {})
         if breadth:
-            up_down_ratio = breadth.get('up_count', 0) / max(breadth.get('down_count', 1), 1)
-            if up_down_ratio > 2:
-                points.append(f"A股赚钱效应较强（涨停{depth.get('limit_up_count', 0)}家，上涨{depth.get('up_count', 0)}家）")
-            elif up_down_ratio < 0.5:
-                points.append(f"A股整体偏弱（跌停{depth.get('limit_down_count', 0)}家）")
+            up_count = breadth.get('up_count', 0)
+            down_count = breadth.get('down_count', 0)
+            total = up_count + down_count
+            if total > 0 and up_count / total > 0.65:
+                limit_up = breadth.get('limit_up_count', 0)
+                points.append(f"A股赚钱效应较强（涨停{limit_up}家，上涨{up_count}家）")
+            elif total > 0 and up_count / total < 0.35:
+                limit_down = breadth.get('limit_down_count', 0)
+                points.append(f"A股整体偏弱（跌停{limit_down}家）")
         
-        # 风险预警
         if judgments.get("risk_alert"):
-            points.append(f"⚠️ {judgments['risk_alert'].replace('⚠️ **风险提示**: ', '')}")
+            points.append(judgments["risk_alert"].replace("⚠️ **风险提示**：", ""))
         
-        return "\n".join([f"- {p}" for p in points]) if points else "- 市场整体平稳，无重大异常信号"
+        if data.hot_sectors:
+            top_sectors = list(set(data.hot_sectors.values()))[:3]
+            if top_sectors:
+                points.append(f"热点板块轮动：{', '.join(top_sectors)}")
+        
+        if not points:
+            points.append("市场整体平稳，无重大异常信号")
+        
+        return "\n".join([f"- {p}" for p in points])
 
     @staticmethod
     def render(data: MarketData) -> str:
@@ -682,19 +717,15 @@ class BriefingRenderer:
         now = datetime.now(TZ_BJS)
         lines = []
         
-        # 标题与时效
         lines.append(f"## 🤖 AI 每日市场简报\n*{date_str} {now.strftime('%H:%M')} 生成*\n")
         
-        # 数据时效说明
         time_note = "> 美股数据截至隔夜收盘 | A股数据截至昨日收盘"
-        lines.append(f"{time_note}\n")
+        lines.append(time_note)
         
-        # 核心结论
-        lines.append("---\n### 🎯 核心结论\n")
+        lines.append("\n---\n### 🎯 核心结论\n")
         key_points = BriefingRenderer.generate_key_points(data)
         lines.append(key_points)
         
-        # 宏观环境
         lines.append("\n---\n### 📊 宏观环境\n")
         if data.judgments.get("macro"):
             lines.append("\n".join(data.judgments["macro"]))
@@ -702,29 +733,30 @@ class BriefingRenderer:
             lines.append("> <font color=\"#8c8c8c\">暂无宏观数据</font>")
         
         if data.extra.get('usd'):
-            lines.append(f"\n> 美元指数 **{data.extra['usd']:.2f}**，对全球资产定价有重要影响")
+            lines.append(f"\n> 美元指数 **{data.extra['usd']:.2f}**")
         
-        # 美股技术
         lines.append("\n---\n### 🇺🇸 美股技术面\n")
         if data.judgments.get("us_tech"):
             lines.append(data.judgments["us_tech"])
         
-        # 港股
         lines.append("\n---\n### 🇭🇰 港股大盘\n")
         if "恒生指数" in data.global_indices:
             hsi = data.global_indices["恒生指数"]
-            lines.append(f"- **恒生指数**: {hsi['price']:.2f} {format_dingtalk_pct(hsi['pct'], False)}")
-            if hsi.get("status") == MarketStatus.SUSPENDED:
-                lines.append("  [休市]")
-        else:
-            lines.append("- <font color=\"#8c8c8c\">暂无数据</font>")
+            lines.append(f"- **恒生指数**：{hsi['price']:.2f} {format_dingtalk_pct(hsi['pct'], False)}")
         
-        # A股技术
+        southbound = data.extra.get('southbound', 0)
+        if southbound != 0:
+            if southbound > 30:
+                lines.append(f"> 🌊 **南向资金**：南水流入 **+{southbound:.0f}亿**")
+            elif southbound < -30:
+                lines.append(f"> ❄️ **南向资金**：南水流 **{southbound:.0f}亿**")
+            else:
+                lines.append(f"> ⚖️ **南向资金**：温和 (**{southbound:+.0f}亿**)")
+        
         lines.append("\n---\n### 🇨🇳 A股技术面\n")
         if data.judgments.get("cn_tech"):
             lines.append(data.judgments["cn_tech"])
         
-        # 市场宽度
         breadth = data.extra.get('breadth', {})
         if breadth:
             lines.append("\n**市场宽度**")
@@ -732,31 +764,48 @@ class BriefingRenderer:
             down_count = breadth.get('down_count', 0)
             limit_up = breadth.get('limit_up_count', 0)
             limit_down = breadth.get('limit_down_count', 0)
-            lines.append(f"> 上涨 **{up_count}** 家 | 下跌 **{down_count}** 家\n> 涨停 **{limit_up}** 家 | 跌停 **{limit_down}** 家")
+            total = up_count + down_count
+            ratio_str = ""
+            if total > 0:
+                ratio = up_count / total
+                if ratio > 0.6:
+                    ratio_str = "偏强"
+                elif ratio < 0.4:
+                    ratio_str = "偏弱"
+                else:
+                    ratio_str = "均衡"
+            volume = breadth.get('volume', 0)
+            volume_str = ""
+            if volume > 0:
+                volume_str = f" | 成交额 {volume/1e8:.1f}亿"
+            
+            lines.append(f"> 上涨 **{up_count}** 家 / 下跌 **{down_count}** 家（{ratio_str}）\n> 涨停 **{limit_up}** 家 / 跌停 **{limit_down}** 家{volume_str}")
         
-        # 资金与情绪
         lines.append("\n---\n### 💰 资金与情绪\n")
         flow_amt, flow_msg = data.northbound_flow
         if flow_msg:
-            lines.append(f"> **北向资金**: {flow_amt:+.1f}亿元")
+            if flow_amt > 50:
+                lines.append(f"> 🌊 **北向资金**：北水大举流入 **+{flow_amt:.0f}亿**")
+            elif flow_amt < -50:
+                lines.append(f"> ❄️ **北向资金**：北水大幅流出 **{flow_amt:.0f}亿**")
+            else:
+                lines.append(f"> ⚖️ **北向资金**：温和 (**{flow_amt:+.0f}亿**)")
         
         if data.hot_sectors:
-            sectors = list(set(data.hot_sectors.values()))[:3]
-            lines.append(f"> 🔥 **热点板块**: {', '.join(sectors)}")
+            top_sectors = list(set(data.hot_sectors.values()))[:3]
+            lines.append(f"\n> 🔥 **热点板块**：{', '.join(top_sectors)}")
         
-        # 投研资讯
         lines.append("\n---\n### 📰 投研资讯精选\n")
         if data.news:
             lines.append("\n\n".join(data.news))
         else:
             lines.append("> <font color=\"#8c8c8c\">暂无高价值资讯</font>")
         
-        # 风险提示
         lines.append("\n---\n### ⚠️ 潜在风险关注\n")
         risk_items = []
         judgments = data.judgments
         if judgments.get("risk_alert"):
-            risk_items.append(judgments["risk_alert"].replace("⚠️ **风险提示**: ", ""))
+            risk_items.append(judgments["risk_alert"].replace("⚠️ **风险提示**：", ""))
         
         if flow_amt < -30:
             risk_items.append("北向资金持续流出，外资避险情绪升温")
@@ -770,9 +819,8 @@ class BriefingRenderer:
         else:
             lines.append("- 暂无明显风险信号")
         
-        # 状态提示
         if data.status["errors"]:
-            lines.append(f"\n> ⚠️ **数据异常**: {', '.join(data.status['errors'][:2])}")
+            lines.append(f"\n> ⚠️ **数据异常**：{', '.join(data.status['errors'][:2])}")
         
         lines.append("\n---\n*<font color=\"#8c8c8c\">Antigravity 量化引擎 | 仅供参考，不构成投资建议</font>*")
         
@@ -849,3 +897,4 @@ if __name__ == '__main__':
         send_dingtalk(report)
     except Exception as e:
         log.critical(f"简报生成崩溃: {e}", exc_info=True)
+
