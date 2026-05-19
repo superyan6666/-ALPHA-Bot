@@ -130,3 +130,52 @@ def get_factors_config(f_val: float, f_mom: float, f_rev: float, f_risk: float,
     factors.append(Factor(lambda d: d.get('has_financial_red_flag', False), -25, f_risk, "- 🚨 **财务风险**：速动/现金流/商誉等指标异常，存在爆雷风险 (重度扣分)"))
     
     return factors
+
+
+def get_etf_factors_config(f_mom: float, m_regime: str) -> list[Factor]:
+    """ETF专属因子配置"""
+    factors = []
+    
+    f_mom_adj = f_mom * 1.3 if m_regime == 'BULL' else 1.0
+    
+    factors.append(Factor(lambda d: d.get('rank_20d', 0) >= 0.75, 15, f_mom_adj, "- 🏆 **强势动量**：20日涨幅排名同类前25%，资金持续涌入", FactorGroup.MOM))
+    factors.append(Factor(lambda d: 0.5 <= d.get('rank_20d', 0) < 0.75, 8, f_mom_adj, "- 📈 **动量尚可**：20日涨幅排名同类中上水平", FactorGroup.MOM))
+    factors.append(Factor(lambda d: d.get('rank_20d', 0) < 0.25, 8, f_mom * 0.5, "- 🟢 **超跌反弹**：20日涨幅排名靠后，存在均值回归机会", FactorGroup.POS))
+    
+    factors.append(Factor(lambda d: d.get('bull_rank', False), 12, f_mom_adj, "- 📈 **均线多头**：MA20 > MA60，中长期上升趋势确认", FactorGroup.TREND))
+    factors.append(Factor(lambda d: d.get('rsi', 50) < 40, 8, f_mom * 0.7, "- 🟢 **RSI低位**：技术指标处于超卖区间，反弹概率大", FactorGroup.TREND))
+    factors.append(Factor(lambda d: 40 <= d.get('rsi', 50) <= 65, 6, f_mom, "- ⚖️ **RSI健康**：技术指标处于健康区间，可持续", FactorGroup.TREND))
+    
+    factors.append(Factor(lambda d: d.get('vol_ratio', 0) >= 1.5, 10, f_mom, "- 🔵 **量能放大**：成交量明显放大，趋势确认", FactorGroup.VOL))
+    factors.append(Factor(lambda d: d.get('has_obv_break', False), 12, f_mom, "- 💸 **资金涌入**：OBV突破近期高点，主力介入", FactorGroup.VOL))
+    
+    factors.append(Factor(lambda d: 0.3 <= d.get('price_pct', 0) <= 0.7, 8, 1.0, "- ⚖️ **位置适中**：处于年度价格区间中部，趋势健康", FactorGroup.POS))
+    factors.append(Factor(lambda d: d.get('pct_chg', 0) > 3, 5, f_mom, "- 🚀 **今日强势**：单日涨幅超过3%，动能强劲", FactorGroup.MOM))
+    
+    factors.append(Factor(lambda d: d.get('surge_5d', 0) > 15, -10, 1.5, "- ⚠️ **短期过热**：近5日涨幅过大，追高风险"))
+    factors.append(Factor(lambda d: d.get('rsi', 50) > 75, -8, 1.5, "- ⚠️ **RSI过热**：技术指标超买，注意回调风险"))
+    
+    return factors
+
+
+def get_cb_factors_config(f_val: float, f_mom: float, m_regime: str) -> list[Factor]:
+    """可转债专属因子配置"""
+    factors = []
+    
+    factors.append(Factor(lambda d: d.get('double_low', 200) < 100, 15, f_val, "- 💎 **双低优选**：价格低+溢价低，下有保底上有弹性", FactorGroup.VAL))
+    factors.append(Factor(lambda d: 100 <= d.get('double_low', 200) < 120, 10, f_val, "- 🟢 **双低尚可**：价格和溢价率适中，配置价值", FactorGroup.VAL))
+    factors.append(Factor(lambda d: 120 <= d.get('double_low', 200) < 140, 5, f_val, "- ⚖️ **双低一般**：溢价率偏高，股性偏弱", FactorGroup.VAL))
+    
+    factors.append(Factor(lambda d: d.get('bond_rt', 50) < 15, 10, f_val, "- 🛡️ **债底保护强**：纯债溢价率低于15%，债性显著", FactorGroup.VAL))
+    factors.append(Factor(lambda d: d.get('bond_rt', 50) < 25, 6, f_val, "- ⚖️ **债底保护可**：纯债溢价率适中", FactorGroup.VAL))
+    
+    factors.append(Factor(lambda d: 2e8 <= d.get('scale', 0) <= 10e8, 8, 1.0, "- 📊 **规模适中**：剩余规模2-10亿，流动性好", FactorGroup.VAL))
+    
+    factors.append(Factor(lambda d: d.get('stock_pct', 0) > 3 and d.get('cb_price', 100) < 130, 10, f_mom, "- 🚀 **正股强势**：正股大涨且转债未过度透支，可关注", FactorGroup.MOM))
+    factors.append(Factor(lambda d: d.get('cb_price', 100) < 105, 8, f_val, "- 💰 **价格接近债底**：债底附近配置安全性极高", FactorGroup.VAL))
+    
+    factors.append(Factor(lambda d: d.get('cb_price', 100) > 150, -12, 1.5, "- 🚫 **价格过高**：超过150元风险大，弹性有限"))
+    factors.append(Factor(lambda d: d.get('premium_rt', 0) > 50, -10, 1.5, "- 🚫 **溢价过高**：转股溢价率超过50%，股性极弱"))
+    factors.append(Factor(lambda d: d.get('scale', 1e9) < 3e7, -8, 1.5, "- 🚫 **规模过小**：剩余规模低于3000万，流动性风险"))
+    
+    return factors

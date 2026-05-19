@@ -325,6 +325,76 @@ class Config:
     OPTIONAL_COLS: tuple = (C.S_VR,)
     HIST_COLS: tuple     = (C.H_DATE, C.H_OPEN, C.H_CLOSE, C.H_HIGH, C.H_LOW, C.H_VOL)
 
+
+class StrategyType:
+    STOCK = "stock"
+    ETF = "etf"
+    CONVERTIBLE_BOND = "cb"
+    SECTOR = "sector"
+    HK = "hk"
+    US = "us"
+
+
+class StrategyConfig:
+    @dataclass(frozen=True)
+    class ETFConfig:
+        enabled: bool = True
+        max_positions: int = 3
+        min_volume: float = 5000e4
+        atr_multiplier: float = 2.5
+        rank_window: int = 20
+        min_rank_pct: float = 0.25
+        
+    @dataclass(frozen=True)
+    class CBConfig:
+        enabled: bool = False
+        max_positions: int = 2
+        max_price: float = 130.0
+        max_premium: float = 30.0
+        min_rating: str = "AA"
+        min_scale: float = 2e8
+        
+    @dataclass(frozen=True)
+    class SectorConfig:
+        enabled: bool = True
+        max_sectors: int = 3
+        momentum_threshold: float = 5.0
+        reversal_threshold: float = -8.0
+        
+    @dataclass(frozen=True)
+    class HKConfig:
+        enabled: bool = False
+        max_positions: int = 2
+        atr_multiplier: float = 2.5
+        min_dividend: float = 3.0
+        
+    @dataclass(frozen=True)
+    class USConfig:
+        enabled: bool = False
+        max_positions: int = 3
+        atr_multiplier: float = 2.0
+        
+    def __init__(self):
+        self.etf = self.ETFConfig()
+        self.cb = self.CBConfig()
+        self.sector = self.SectorConfig()
+        self.hk = self.HKConfig()
+        self.us = self.USConfig()
+        self._load_from_env()
+        
+    def _load_from_env(self):
+        active = config.get('ACTIVE_STRATEGIES', 'stock,etf,sector').split(',')
+        self.etf = self.ETFConfig(enabled='etf' in active)
+        self.cb = self.CBConfig(enabled='cb' in active)
+        self.sector = self.SectorConfig(enabled='sector' in active)
+        self.hk = self.HKConfig(enabled='hk' in active)
+        self.us = self.USConfig(enabled='us' in active)
+    
+    def is_enabled(self, strategy_type: str) -> bool:
+        return getattr(self, strategy_type, None) and getattr(self, strategy_type).enabled
+
+strategy_config = StrategyConfig()
+
 @dataclass
 class Signal:
     code: str
@@ -339,6 +409,7 @@ class Signal:
     target1: float
     ma10: float
     
+    strategy_type: str = "stock"
     money_risk_msg: str = ""
     tranche_plan_msg: str = ""
     plan_b_msg: str = ""
@@ -852,6 +923,63 @@ class DataProxy:
         except Exception: pass
         return 0.0, ""
 
+    def get_etf_spot(self) -> pd.DataFrame:
+        """获取ETF实时行情"""
+        try:
+            df = ak.fund_etf_fund_info_em()
+            if df is not None and not df.empty:
+                return df
+        except Exception as e:
+            log.debug(f"ETF实时行情获取失败: {e}")
+        return pd.DataFrame()
+    
+    def get_etf_hist(self, symbol: str, days: int = 250) -> pd.DataFrame:
+        """获取ETF历史净值数据"""
+        try:
+            end = datetime.now().strftime('%Y%m%d')
+            start = (datetime.now() - timedelta(days=days)).strftime('%Y%m%d')
+            df = ak.fund_etf_hist_em(symbol=symbol, period='daily', start_date=start, end_date=end)
+            if df is not None and not df.empty:
+                col_map = {'日期': C.H_DATE, '开盘': C.H_OPEN, '收盘': C.H_CLOSE, '最高': C.H_HIGH, '最低': C.H_LOW, '成交量': C.H_VOL}
+                df = df.rename(columns=col_map)
+                return df
+        except Exception as e:
+            log.debug(f"ETF历史净值获取失败 {symbol}: {e}")
+        return pd.DataFrame()
+    
+    def get_convertible_bonds(self) -> pd.DataFrame:
+        """获取可转债实时数据"""
+        try:
+            df = ak.bond_zh_cov()
+            if df is not None and not df.empty:
+                return df
+        except Exception as e:
+            log.debug(f"可转债数据获取失败: {e}")
+        return pd.DataFrame()
+    
+    def get_southbound_flow(self) -> tuple[float, str]:
+        """获取南向资金流向"""
+        try:
+            df = ak.stock_em_hsgt_south_net_flow_in(indicator="沪深港通")
+            if df is not None and not df.empty:
+                col = 'value' if 'value' in df.columns else df.columns[-1]
+                today_flow = float(df.iloc[-1][col]) / 1e8
+                if today_flow > 20: return today_flow, f"南向流入 +{today_flow:.0f}亿"
+                elif today_flow < -20: return today_flow, f"南向流出 {today_flow:.0f}亿"
+                else: return today_flow, f"南向温和 {today_flow:+.0f}亿"
+        except Exception: pass
+        return 0.0, ""
+    
+    def get_hk_spot(self) -> pd.DataFrame:
+        """获取港股实时行情"""
+        try:
+            df = ak.stock_hk_spot_em()
+            if df is not None and not df.empty:
+                return df
+        except Exception as e:
+            log.debug(f"港股实时行情获取失败: {e}")
+        return pd.DataFrame()
+
 class LocalDataLake:
     """本地数据湖缓存拦截层"""
     def __init__(self, proxy: DataProxy):
@@ -987,6 +1115,45 @@ class LocalDataLake:
         val = self.proxy.get_hot_sectors()
         self._set_cache("hot_sectors", val)
         return val
+    
+    def fetch_sector_rotation(self) -> list[dict]:
+        """获取行业轮动信号"""
+        try:
+            import akshare as ak
+            df = ak.stock_board_industry_index_em()
+            if df is not None and not df.empty:
+                results = []
+                for _, row in df.iterrows():
+                    try:
+                        symbol = row.get('板块代码', '')
+                        if not symbol:
+                            continue
+                        hist = self.proxy.fetch_index(symbol)
+                        if hist is not None and len(hist) >= 25:
+                            ret_20d = (hist['close'].iloc[-1] / hist['close'].iloc[-21] - 1) * 100 if len(hist) >= 21 else 0
+                            ret_5d = (hist['close'].iloc[-1] / hist['close'].iloc[-6] - 1) * 100 if len(hist) >= 6 else 0
+                            today_pct = hist['close'].pct_change().iloc[-1] * 100 if len(hist) >= 1 else 0
+                            
+                            signal_type = None
+                            if ret_20d > 5 and hist['volume'].iloc[-5:].mean() > hist['volume'].iloc[-20:-5].mean() * 1.2:
+                                signal_type = "主升"
+                            elif ret_5d < -8 and today_pct > 2:
+                                signal_type = "反弹"
+                            
+                            if signal_type:
+                                results.append({
+                                    'name': row.get('板块名称', ''),
+                                    'pct': row.get('涨跌幅', 0),
+                                    'ret_20d': ret_20d,
+                                    'signal': signal_type
+                                })
+                    except Exception:
+                        continue
+                results.sort(key=lambda x: x['ret_20d'], reverse=True)
+                return results[:10]
+        except Exception as e:
+            log.debug(f"行业轮动分析失败: {e}")
+        return []
         
     def fetch_northbound_flow(self):
         cached = self._get_cache("northbound", 300) # 5分钟时效
@@ -994,6 +1161,46 @@ class LocalDataLake:
             if isinstance(cached, tuple): return cached
         val = self.proxy.get_northbound_flow()
         self._set_cache("northbound", val)
+        return val
+    
+    def fetch_etf_spot(self):
+        cached = self._get_cache("etf_spot", 1800)
+        if cached is not None:
+            if isinstance(cached, pd.DataFrame) and not cached.empty: return cached
+        val = self.proxy.get_etf_spot()
+        self._set_cache("etf_spot", val)
+        return val
+    
+    def fetch_etf_hist(self, symbol: str):
+        key = f"etf_hist_{symbol}"
+        cached = self._get_cache(key, 86400)
+        if cached is not None: return cached
+        val = self.proxy.get_etf_hist(symbol)
+        self._set_cache(key, val)
+        return val
+    
+    def fetch_convertible_bonds(self):
+        cached = self._get_cache("cb_spot", 600)
+        if cached is not None:
+            if isinstance(cached, pd.DataFrame) and not cached.empty: return cached
+        val = self.proxy.get_convertible_bonds()
+        self._set_cache("cb_spot", val)
+        return val
+    
+    def fetch_southbound_flow(self):
+        cached = self._get_cache("southbound", 300)
+        if cached is not None:
+            if isinstance(cached, tuple): return cached
+        val = self.proxy.get_southbound_flow()
+        self._set_cache("southbound", val)
+        return val
+    
+    def fetch_hk_spot(self):
+        cached = self._get_cache("hk_spot", 300)
+        if cached is not None:
+            if isinstance(cached, pd.DataFrame) and not cached.empty: return cached
+        val = self.proxy.get_hk_spot()
+        self._set_cache("hk_spot", val)
         return val
 
 # ── 实例化全局单例，保持对外接口完全兼容 ──
@@ -1006,6 +1213,11 @@ def fetch_index(symbol): return _DATA_LAKE.fetch_index(symbol)
 def fetch_core_pool(): return _DATA_LAKE.fetch_core_pool()
 def fetch_hot_sectors(): return _DATA_LAKE.fetch_hot_sectors()
 def fetch_northbound_flow(): return _DATA_LAKE.fetch_northbound_flow()
+def fetch_etf_spot(): return _DATA_LAKE.fetch_etf_spot()
+def fetch_etf_hist(symbol): return _DATA_LAKE.fetch_etf_hist(symbol)
+def fetch_convertible_bonds(): return _DATA_LAKE.fetch_convertible_bonds()
+def fetch_southbound_flow(): return _DATA_LAKE.fetch_southbound_flow()
+def fetch_hk_spot(): return _DATA_LAKE.fetch_hk_spot()
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -1202,6 +1414,129 @@ class AShareTechnicals:
         }
 
 
+class ETFTechnicals:
+    """ETF专用特征提取引擎"""
+    def __init__(self, df: pd.DataFrame, benchmark_ret: float = 0.0):
+        self.df = df.copy()
+        close = self.df[C.H_CLOSE]
+        high, low, vol = self.df[C.H_HIGH], self.df[C.H_LOW], self.df[C.H_VOL]
+        
+        for span in (5, 10, 20, 60):
+            self.df[f'MA{span}'] = close.rolling(span).mean()
+        self.df['MA5_V'] = vol.rolling(5).mean()
+        self.df['MA20_V'] = vol.rolling(20).mean()
+        
+        ema12 = close.ewm(span=12, adjust=False).mean()
+        ema26 = close.ewm(span=26, adjust=False).mean()
+        self.df['DIF'] = ema12 - ema26
+        self.df['DEA'] = self.df['DIF'].ewm(span=9, adjust=False).mean()
+        self.df['MACD'] = (self.df['DIF'] - self.df['DEA']) * 2
+        
+        self.df['ATR'], self.df['ADX'] = MathUtils.calc_atr_adx(self.df)
+        
+        delta = close.diff()
+        gain = delta.clip(lower=0.0).rolling(14).mean()
+        loss = (-delta.clip(upper=0.0)).rolling(14).mean()
+        rs = gain / loss.replace(0, np.nan)
+        self.df['RSI14'] = 100 - (100 / (1 + rs))
+        
+        self.df['PCT_CHG'] = close.pct_change() * 100
+        self.df['OBV'] = np.where(close > close.shift(), vol, np.where(close < close.shift(), -vol, 0)).cumsum()
+        
+        self.today = self.df.iloc[-1]
+        self.yest = self.df.iloc[-2]
+        self.benchmark_ret = benchmark_ret
+    
+    def get_features(self) -> Optional[dict]:
+        df, today = self.df, self.today
+        if pd.isna(today['ATR']) or today['ATR'] <= 1e-5:
+            return None
+        
+        min_1y, max_1y = df[C.H_LOW].min(), df[C.H_HIGH].max()
+        rng = max_1y - min_1y
+        if rng <= 0:
+            return None
+        
+        price_pct = (today[C.H_CLOSE] - min_1y) / rng
+        
+        rsi = float(today.get('RSI14', 50))
+        if pd.isna(rsi) or rsi > 90:
+            return None
+        
+        surge_5d = (today[C.H_CLOSE] / df[C.H_CLOSE].iloc[-6] - 1) * 100 if len(df) >= 6 else 0.0
+        
+        vcp_amp, is_true_vcp = MathUtils.calc_vcp_quality(df)
+        
+        red_days = 0
+        for i in range(1, 4):
+            if df[C.H_CLOSE].iloc[-i] > df[C.H_OPEN].iloc[-i]:
+                red_days += 1
+            else:
+                break
+        
+        vol_ratio = today[C.H_VOL] / today['MA20_V'] if pd.notna(today['MA20_V']) and today['MA20_V'] > 0 else 1.0
+        
+        rank_20d = self._calc_rank_pct()
+        
+        return {
+            'price_pct': price_pct,
+            'adx': float(today['ADX']),
+            'bull_rank': bool(today['MA20'] > today['MA60']),
+            'rsi': rsi,
+            'surge_5d': surge_5d,
+            'vcp_amp': vcp_amp,
+            'is_true_vcp': is_true_vcp,
+            'red_days': red_days,
+            'vol_ratio': float(vol_ratio),
+            'dist_ma20': (today[C.H_CLOSE] / today['MA20'] - 1) * 100,
+            'macd_dea': float(today['DEA']),
+            'ma10_val': float(today['MA10']),
+            'ma20_val': float(today['MA20']),
+            'atr_val': float(today['ATR']),
+            'close_val': float(today[C.H_CLOSE]),
+            'atr_pct': (float(today['ATR']) / float(today[C.H_CLOSE])) * 100,
+            'rs_rating': ((today[C.H_CLOSE] / df[C.H_CLOSE].iloc[-60] - 1) * 100 - self.benchmark_ret) if len(df) >= 60 else 0.0,
+            'rank_20d': rank_20d,
+            'has_obv_break': bool(df['OBV'].iloc[-1] > df['OBV'].iloc[-21:-1].max()),
+            'pct_chg': float(today['PCT_CHG']),
+        }
+    
+    def _calc_rank_pct(self) -> float:
+        """计算20日涨幅在近一年中的排名分位"""
+        if len(self.df) < 250:
+            return 0.5
+        ret_20d = (self.df[C.H_CLOSE].iloc[-1] / self.df[C.H_CLOSE].iloc[-21] - 1) * 100 if len(self.df) >= 21 else 0.0
+        all_returns = []
+        for i in range(21, len(self.df)):
+            ret = (self.df[C.H_CLOSE].iloc[i] / self.df[C.H_CLOSE].iloc[i-21] - 1) * 100
+            all_returns.append(ret)
+        if not all_returns:
+            return 0.5
+        rank = sum(1 for r in all_returns if r < ret_20d)
+        return rank / len(all_returns)
+
+
+class CBTechnicals:
+    """可转债专用特征提取引擎"""
+    def __init__(self, row: pd.Series):
+        self.row = row
+    
+    def get_features(self) -> dict:
+        return {
+            'cb_price': float(self.row.get('最新价', 100)),
+            'premium_rt': float(self.row.get('转股溢价率', 50)),
+            'bond_rt': float(self.row.get('纯债溢价率', 10)),
+            'scale': float(self.row.get('剩余规模', 1e9)),
+            'rating': str(self.row.get('债券评级', 'AAA')),
+            'stock_price': float(self.row.get('正股最新价', 0)),
+            'stock_pct': float(self.row.get('正股涨跌幅', 0)),
+        }
+    
+    def calc_double_low_score(self) -> float:
+        """计算双低值（价格 + 溢价率*100），越低越好"""
+        return self.row.get('最新价', 100) + self.row.get('转股溢价率', 50) * 0.5
+
+
 # ═════════════════════════════════════════════════════════════════════════════
 # 8. 打分与自适应演化引擎 (Scoring & Evolution Engine)
 # ═════════════════════════════════════════════════════════════════════════════
@@ -1306,6 +1641,116 @@ def apply_scoring(data: dict, now: datetime, m_regime: str, vol_surge: bool, win
         level = '⭐⭐⭐ 🦊 **[B+级·小狐狸]** (次优机会，必须控制仓位)'
     else:
         level = '⭐⭐ 🐒 **[B级·小猕猴]** (上蹿下跳振幅大，新手回避)'
+        
+    return final_score, level, '\n'.join(reasons)
+
+
+def apply_etf_scoring(data: dict, m_regime: str, win_stats: dict) -> tuple[int, str, str]:
+    """ETF专属打分引擎"""
+    adx = data.get('adx', 50)
+    tw = 1.4 if adx > 25 else 0.8 if adx < 15 else 1.0
+    
+    f_mom = 1.3 if m_regime == 'BULL' else 0.8 if m_regime == 'BEAR' else 1.0
+    
+    factors = get_etf_factors_config(f_mom, m_regime)
+    
+    group_scores = {}
+    group_reasons = {}
+    
+    for f in factors:
+        if f.condition(data):
+            pts = int(f.points * f.weight)
+            msg = f.template
+            group = f.group if f.group else "DEFAULT"
+            if group not in group_scores or pts > group_scores[group]:
+                group_scores[group] = pts
+                group_reasons[group] = msg
+    
+    total_bonus = sum(group_scores.values())
+    capped_bonus = min(total_bonus, 40)
+    
+    raw_score = 45 + capped_bonus
+    reasons = ["- 🧭 **ETF轮动信号**：基于动量、趋势、资金多维度评估"]
+    reasons.extend(group_reasons.values())
+    
+    raw_score = max(0, min(raw_score, 100))
+    
+    bucket = get_score_bucket(raw_score)
+    b_stats = win_stats.get(bucket, {'win': 0, 'total': 0})
+    if b_stats['total'] >= 5:
+        wr = b_stats['win'] / b_stats['total']
+        multiplier = 0.8 + 0.4 * wr
+        final_score = int(raw_score * multiplier)
+        reasons.append(f"- 🧬 **AI自进化**：ETF该分数段历史胜率 `{wr*100:.1f}%`")
+    else:
+        final_score = raw_score
+    
+    final_score = max(0, min(final_score, 100))
+    
+    if final_score >= 80:
+        level = '⭐⭐⭐⭐⭐ 📊 **[S级·强势ETF]**'
+    elif final_score >= 70:
+        level = '⭐⭐⭐⭐ 📈 **[A级·优选ETF]**'
+    elif final_score >= 60:
+        level = '⭐⭐⭐ 📊 **[B+级·可关注]**'
+    else:
+        level = '⭐⭐ 📉 **[观望级]**'
+        
+    return final_score, level, '\n'.join(reasons)
+
+
+def apply_cb_scoring(data: dict, m_regime: str, win_stats: dict) -> tuple[int, str, str]:
+    """可转债专属打分引擎"""
+    f_val = 1.3 if m_regime == 'BEAR' else 0.8 if m_regime == 'BULL' else 1.0
+    f_mom = 1.2 if m_regime == 'BULL' else 0.8
+    
+    factors = get_cb_factors_config(f_val, f_mom, m_regime)
+    
+    group_scores = {}
+    group_reasons = {}
+    penalty_score = 0
+    
+    for f in factors:
+        if f.condition(data):
+            pts = int(f.points * f.weight)
+            msg = f.template
+            if f.points < 0:
+                penalty_score += pts
+            else:
+                group = f.group if f.group else "DEFAULT"
+                if group not in group_scores or pts > group_scores[group]:
+                    group_scores[group] = pts
+                    group_reasons[group] = msg
+    
+    total_bonus = sum(group_scores.values())
+    capped_bonus = min(total_bonus, 40)
+    
+    raw_score = 45 + capped_bonus + penalty_score
+    reasons = ["- 🛡️ **可转债防御信号**：基于双低、债底、规模多维度评估"]
+    reasons.extend(group_reasons.values())
+    
+    raw_score = max(0, min(raw_score, 100))
+    
+    bucket = get_score_bucket(raw_score)
+    b_stats = win_stats.get(bucket, {'win': 0, 'total': 0})
+    if b_stats['total'] >= 5:
+        wr = b_stats['win'] / b_stats['total']
+        multiplier = 0.8 + 0.4 * wr
+        final_score = int(raw_score * multiplier)
+        reasons.append(f"- 🧬 **AI自进化**：转债该分数段历史胜率 `{wr*100:.1f}%`")
+    else:
+        final_score = raw_score
+    
+    final_score = max(0, min(final_score, 100))
+    
+    if final_score >= 80:
+        level = '⭐⭐⭐⭐⭐ 💎 **[S级·双低优选]**'
+    elif final_score >= 70:
+        level = '⭐⭐⭐⭐ 🛡️ **[A级·防守优选]**'
+    elif final_score >= 60:
+        level = '⭐⭐⭐ ⚖️ **[B+级·可配置]**'
+    else:
+        level = '⭐⭐ 📉 **[观望级]**'
         
     return final_score, level, '\n'.join(reasons)
 
