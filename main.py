@@ -1129,6 +1129,16 @@ class AShareTechnicals:
             if is_ma_converging or ma_spread.iloc[-2] < 0.02:
                 if today['MA5'] > today['MA10'] > today['MA20'] and current_spread > ma_spread.iloc[-2] * 1.2:
                     is_ma_diverging_up = True
+        
+        # --- 【新增：NR7/ID波幅收缩检测】 ---
+        is_nr7 = False
+        if len(df) >= 10:
+            # 计算近7日振幅
+            amp_recent = df.iloc[-8:-1].apply(lambda x: x[C.H_HIGH] - x[C.H_LOW], axis=1)
+            today_amp = today[C.H_HIGH] - today[C.H_LOW]
+            if len(amp_recent) >= 6:
+                min_amp = amp_recent.min()
+                is_nr7 = bool(today_amp <= min_amp * 1.05)
 
         return {
             'is_first_dip': is_first_dip,
@@ -1160,6 +1170,7 @@ class AShareTechnicals:
             'is_pivot_point': is_pivot_point,
             'is_ma_converging': is_ma_converging,
             'is_ma_diverging_up': is_ma_diverging_up,
+            'is_nr7': is_nr7,
             # 默认基本面数据（等待后续接入真实数据源）
             'roe': 0.0,
             'revenue_growth': 0.0,
@@ -1201,7 +1212,7 @@ def apply_scoring(data: dict, now: datetime, m_regime: str, vol_surge: bool, win
 
     in_danger, danger_label = is_earnings_danger_zone(now)
 
-    factors = get_factors_config(f_val, f_mom, f_rev, f_risk, tw, rw, m_regime, in_danger, danger_label)
+    factors = get_factors_config(f_val, f_mom, f_rev, f_risk, tw, rw, m_regime, in_danger, danger_label, data)
 
     group_scores = {}
     group_reasons = {}
@@ -1234,6 +1245,11 @@ def apply_scoring(data: dict, now: datetime, m_regime: str, vol_surge: bool, win
     
     if total_bonus > 45:
         group_reasons['CAPPED'] = f"- 🛡️ **[溢出截断]**：多项利好共振(理论+{total_bonus}分)，为防多重共线性过拟合，强行封顶至 +45 分。"
+    
+    # 防止过拟合：触发正向因子数 >6 时，总加分打8折
+    if len(group_scores) > 6:
+        capped_bonus = int(capped_bonus * 0.8)
+        group_reasons['OVERFIT'] = f"- ⚖️ **[共振压缩]**：触发{len(group_scores)}个因子过多，为避免过拟合，总加分打8折。"
 
     raw_score = 45 + capped_bonus + penalty_score
     reasons = [meta] if meta else []
