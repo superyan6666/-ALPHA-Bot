@@ -1,8 +1,10 @@
 import os
 import json
 import time
+import pickle
 import requests
 import logging
+import logging.handlers
 from datetime import datetime
 import pandas as pd
 import akshare as ak
@@ -46,6 +48,23 @@ def safe_request_get(url, headers=None, timeout=5, max_retries=2):
             else:
                 log.warning(f"请求失败 ({max_retries}次尝试): {url} - {e}")
                 return None
+
+def health_check():
+    """健康检查，返回问题列表"""
+    checks = []
+    # 检查必要的包
+    for mod in ['pandas', 'requests']:
+        try:
+            __import__(mod)
+        except ImportError:
+            checks.append(f"{mod} 未安装")
+    # 可选依赖检查
+    for mod in ['yfinance', 'tushare']:
+        try:
+            __import__(mod)
+        except ImportError:
+            log.warning(f"{mod} 未安装，部分功能将受限")
+    return checks
 
 class MacroBrain:
     @staticmethod
@@ -117,35 +136,51 @@ class MacroBrain:
 class MacroJudgmentEngine:
     @staticmethod
     def calc_rsi(series, period=14):
+        """计算RSI，带有完善的除零保护"""
         delta = series.diff()
-        gain = (delta.where(delta > 0, 0)).rolling(window=period).mean()
-        loss = (-delta.where(delta < 0, 0)).rolling(window=period).mean()
+        gain = delta.clip(lower=0)
+        loss = -delta.clip(upper=0)
+        avg_gain = gain.rolling(window=period).mean()
+        avg_loss = loss.rolling(window=period).mean()
         
         # 除零保护
-        rs = gain / loss
-        rs = rs.fillna(0)
-        rs = rs.replace([float('inf'), -float('inf')], 0)
-        
+        avg_loss = avg_loss.replace(0, 1e-10)
+        rs = avg_gain / avg_loss
         rsi = 100 - (100 / (1 + rs))
-        rsi = rsi.fillna(50)  # 数据不足时返回中性值
-        
-        # 特殊情况处理
-        mask = (loss == 0) & (gain > 0)
-        rsi = rsi.mask(mask, 100)  # 只有上涨，RSI=100
-        mask = (loss == 0) & (gain == 0)
-        rsi = rsi.mask(mask, 50)   # 无波动，RSI=50
-        
+        rsi = rsi.fillna(50)
         return rsi
 
     @staticmethod
     def get_judgments():
         result = {"macro": [], "us_tech": "", "cn_tech": "", "risk_alert": ""}
+        
+        # 尝试使用缓存
+        cache_file = f"cache_{_today_str()}.pkl"
+        yf_data = None
+        if os.path.exists(cache_file):
+            try:
+                with open(cache_file, 'rb') as f:
+                    yf_data = pickle.load(f)
+                log.info("使用缓存的 yfinance 数据")
+            except Exception as e:
+                log.warning(f"加载缓存失败: {e}")
+        
         try:
             import yfinance as yf
             
-            tickers = yf.Tickers("^TNX ^VIX ^SKEW HG=F GC=F CL=F ^GSPC 000300.SS")
-            hist = tickers.history(period="6mo")
-            close_df = hist['Close']
+            if yf_data is None:
+                tickers = yf.Tickers("^TNX ^VIX ^SKEW HG=F GC=F CL=F ^GSPC 000300.SS")
+                hist = tickers.history(period="6mo")
+                yf_data = hist['Close']
+                # 保存缓存
+                try:
+                    with open(cache_file, 'wb') as f:
+                        pickle.dump(yf_data, f)
+                    log.info("保存 yfinance 数据到缓存")
+                except Exception as e:
+                    log.warning(f"保存缓存失败: {e}")
+            
+            close_df = yf_data
 
             def get_last(ticker):
                 s = close_df[ticker].dropna()
@@ -155,6 +190,13 @@ class MacroJudgmentEngine:
                 s = close_df[ticker].dropna()
                 if len(s) > days:
                     return s.iloc[-1] - s.iloc[-days-1]
+                return 0.0
+            
+            def get_mtm_pct(ticker, days=5):
+                """计算动量百分比"""
+                s = close_df[ticker].dropna()
+                if len(s) > days and s.iloc[-days-1] != 0:
+                    return (s.iloc[-1] / s.iloc[-days-1] - 1) * 100
                 return 0.0
 
             def get_ma_trend(ticker):
@@ -250,19 +292,21 @@ class MacroJudgmentEngine:
             csi300_rsi = MacroJudgmentEngine.calc_rsi(csi300).iloc[-1] if not csi300.empty else 50
             gspc_rsi = MacroJudgmentEngine.calc_rsi(gspc).iloc[-1] if not gspc.empty else 50
             csi300_mtm = get_mtm('000300.SS')
+            csi300_mtm_pct = get_mtm_pct('000300.SS')
             gspc_mtm = get_mtm('^GSPC')
+            gspc_mtm_pct = get_mtm_pct('^GSPC')
 
             csi300_trend_name, csi300_trend_desc = get_ma_trend('000300.SS')
             gspc_trend_name, gspc_trend_desc = get_ma_trend('^GSPC')
 
-            us_msg = f"> 📊 **技术动能**: 标普500 5日MTM **{gspc_mtm:+.2f}** (RSI: {gspc_rsi:.1f})\n> 📈 **大盘趋势**: **{gspc_trend_name}** - {gspc_trend_desc}"
+            us_msg = f"> 📊 **技术动能**: 标普500 5日MTM **{gspc_mtm:+.2f}** ({gspc_mtm_pct:+.2f}%, RSI: {gspc_rsi:.1f})\n> 📈 **大盘趋势**: **{gspc_trend_name}** - {gspc_trend_desc}"
             result["us_tech"] = us_msg
             
-            a_msg = f"> 📊 **技术动能**: 沪深300 5日MTM **{csi300_mtm:+.2f}** (RSI: {csi300_rsi:.1f})\n> 📈 **大盘趋势**: **{csi300_trend_name}** - {csi300_trend_desc}"
+            a_msg = f"> 📊 **技术动能**: 沪深300 5日MTM **{csi300_mtm:+.2f}** ({csi300_mtm_pct:+.2f}%, RSI: {csi300_rsi:.1f})\n> 📈 **大盘趋势**: **{csi300_trend_name}** - {csi300_trend_desc}"
             result["cn_tech"] = a_msg
 
         except ImportError:
-            log.warning("yfinance 或 pandas 未安装，跳过高阶宏观研判")
+            log.warning("yfinance 未安装，跳过高阶宏观研判")
             result["macro"].append("> <font color=\"#8c8c8c\">yfinance未安装，宏观研判已降级</font>")
         except Exception as e:
             log.warning(f"高阶研判引擎运行失败: {e}", exc_info=True)
@@ -284,13 +328,14 @@ class NewsDigest:
             return -1
         
         # 低价值关键词（扣分但不丢弃）
-        low_value_words = [
-            "高管", "聘任", "董事", "股东大会", "互动平台",
-            "早报", "必读", "提示性公告", "例行"
-        ]
-        for w in low_value_words:
-            if w in title:
-                score -= 2
+        LOW_WEIGHT_WORDS = {
+            "早报": -2, "必读": -2, "提示性公告": -1,
+            "互动平台": -3, "董事": -2, "股东大会": -2,
+            "高管": -1, "聘任": -1, "例行": -2
+        }
+        for word, penalty in LOW_WEIGHT_WORDS.items():
+            if word in title:
+                score += penalty
         
         # T1 宏观与顶层政策（最高权重）
         t1_words = ["发改委", "工信部", "央行", "国务院", "新规", "印发", 
@@ -336,7 +381,11 @@ class NewsDigest:
                 df = pro.news(src='cls', limit=limit+80)
                 if df is not None and not df.empty:
                     for _, row in df.iterrows():
-                        time_str = row['datetime'][11:16]
+                        try:
+                            ts = pd.to_datetime(row['datetime'])
+                            time_str = ts.strftime('%H:%M')
+                        except Exception:
+                            time_str = ''
                         title = row['title'] if row['title'] else row['content'][:50]+"..."
                         score = NewsDigest.score_news(title)
                         if score > 0:
@@ -345,7 +394,10 @@ class NewsDigest:
                     if scored_news:
                         scored_news.sort(key=lambda x: (x[0], x[1]), reverse=True)
                         for _, _, time_str, title in scored_news[:limit]:
-                            news_list.append(f"> **[{time_str}]** {title}")
+                            if time_str:
+                                news_list.append(f"> **[{time_str}]** {title}")
+                            else:
+                                news_list.append(f"> {title}")
                         log.info(f"Tushare财联社新闻获取成功，筛选出 {len(news_list)} 条高价值资讯")
                         return news_list
                 else:
@@ -530,12 +582,13 @@ class BriefingRenderer:
         
         if len(content) > DINGTALK_MAX_LENGTH:
             log.warning(f"简报长度 {len(content)} 超过限制，需要截断")
-            lines = content.split("\n")
-            news_start = next((i for i, line in enumerate(lines) if "核心投研资讯" in line), -1)
-            if news_start > 0 and news_start < len(lines) - 3:
-                lines = lines[:news_start + 2] + lines[-3:]
-                content = "\n".join(lines)
-                log.info(f"截断后长度: {len(content)}")
+            # 使用更精确的截断策略
+            trunc_marker = "\n---\n*<font color=\"#8c8c8c\">"
+            idx = content.rfind(trunc_marker, 0, DINGTALK_MAX_LENGTH)
+            if idx != -1:
+                content = content[:idx] + "\n\n*⚠️ 内容过长已截断，请检查完整日志*"
+            else:
+                content = content[:DINGTALK_MAX_LENGTH] + "\n\n*⚠️ 内容过长已截断，请检查完整日志*"
         
         return content
 
@@ -566,7 +619,24 @@ def send_dingtalk(content: str):
         log.error(f"❌ 推送处理失败: {e}")
 
 if __name__ == '__main__':
+    # 配置日志
     logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+    
+    # 添加文件日志处理器
+    try:
+        file_handler = logging.FileHandler(f'briefing_{_today_str()}.log', encoding='utf-8')
+        file_handler.setFormatter(logging.Formatter('%(asctime)s - %(levelname)s - %(message)s'))
+        logging.getLogger().addHandler(file_handler)
+        log.info(f"日志文件: briefing_{_today_str()}.log")
+    except Exception as e:
+        log.warning(f"文件日志初始化失败: {e}")
+    
+    # 健康检查
+    health_issues = health_check()
+    if health_issues:
+        log.warning("健康检查发现问题:")
+        for issue in health_issues:
+            log.warning(f"  - {issue}")
     
     try:
         report = BriefingRenderer.render()
