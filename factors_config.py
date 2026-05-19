@@ -11,6 +11,8 @@ class FactorGroup(str, Enum):
     VCP = "VCP_PATTERN"       # 波动率收敛与洗盘结构类
     TREND = "TREND_RSI"       # 趋势指标类 (RSI/DEA/BullRank)
     SPECIAL = "SPECIAL_ALPHA" # 特殊独立加分项 (如MACD底背离/龙头首阴)
+    FUNDAMENTAL = "FUNDAMENTAL" # 新增：基本面质量因子 (ROE/营收增长)
+    RESONANCE = "RESONANCE"   # 新增：多因子共振加成项
 
 @dataclass
 class Factor:
@@ -35,6 +37,10 @@ def get_factors_config(f_val: float, f_mom: float, f_rev: float, f_risk: float,
     - rw (Reversal Weight): 震荡反转乘数。当 ADX < 15 (震荡蓄势) 时被激活放大。
     """
     return [
+        # --- 【高优先级新增核心因子】 ---
+        Factor(lambda d: d.get('rs_rating', 0) > 10,  12, f_mom, "- 🏆 **RS Line 强势**：近60日涨幅远超指数，机构持续运作的优质标的 (强加分)", FactorGroup.MOM),
+        Factor(lambda d: d.get('is_pivot_point', False), 15, f_mom, "- 🚀 **口袋支点**：股价中期调整后放量突破前高，经典强势启动信号 (强加分)", FactorGroup.MOM),
+        
         Factor(lambda d: d.get('macd_divergence', False), 25, 1.0, "- 🧲 **MACD底背离**：日线级别价格创新低但动能衰竭，极其罕见的左侧黄金坑 (触发强加权)", FactorGroup.SPECIAL),
         Factor(lambda d: d.get('mcap', 0) > 300e8 and 0 < d.get('pe', -1) < 25 and d.get('pb', 10) < 3, 10, f_val, "- 🏢 **价值蓝筹**：大市值低估值核心资产，防守属性极强", FactorGroup.VAL),
         Factor(lambda d: d.get('vol_ratio', 0) > 1.0 and d.get('rs_rating', 0) > 5, 10, f_mom, "- 🚀 **强势领涨**：近期显著强于大盘，资金接力意愿极强", FactorGroup.MOM),
@@ -72,6 +78,20 @@ def get_factors_config(f_val: float, f_mom: float, f_rev: float, f_risk: float,
         
         Factor(lambda d: d.get('rs_rating', 0) > 5,  8, f_mom, "- 🏆 **跑赢大盘**：近60日涨幅超越指数，有资金在持续运作", FactorGroup.MOM),
         
+        # --- 【新增：均线粘合发散】 ---
+        Factor(lambda d: d.get('is_ma_converging', False), 8, 1.0, "- 🔍 **均线粘合**：各条均线高度接近，变盘窗口临近", FactorGroup.VCP),
+        Factor(lambda d: d.get('is_ma_diverging_up', False), 12, tw * f_mom, "- 🌊 **均线发散向上**：粘合后首次向上发散，趋势启动信号强烈", FactorGroup.MOM),
+        
+        # --- 【新增：基本面质量因子】 ---
+        Factor(lambda d: d.get('roe', 0) > 15, 10, f_val, "- 💎 **ROE 优异**：净资产收益率 >15%，内生盈利能力强，护城河深厚", FactorGroup.FUNDAMENTAL),
+        Factor(lambda d: d.get('roe', 0) > 10, 5, f_val, "- 🛡️ **ROE 良好**：净资产收益率 >10%，盈利能力达标", FactorGroup.FUNDAMENTAL),
+        Factor(lambda d: d.get('revenue_growth', 0) > 20, 10, f_mom, "- 📈 **营收高增**：近季度营收增速 >20%，成长属性显著", FactorGroup.FUNDAMENTAL),
+        Factor(lambda d: d.get('profit_growth', 0) > 15, 8, f_mom, "- 💵 **利润增长**：近季度净利润增速 >15%，业绩向好", FactorGroup.FUNDAMENTAL),
+        Factor(lambda d: m_regime != 'BULL' and d.get('dividend_yield', 0) > 2, 5, f_val, "- 💰 **股息防御**：股息率 >2%，非牛市阶段具有抗跌防守属性", FactorGroup.FUNDAMENTAL),
+        
+        # --- 【新增：多因子共振加成】 ---
+        Factor(lambda d: d.get('is_pivot_point', False) and d.get('rs_rating', 0) > 10 and d.get('in_hot_sector', False), 5, 1.0, "- 🌟 **三因子共振**：口袋支点 + 强势 RS + 热门板块，胜率显著提升", FactorGroup.RESONANCE),
+        
         # --- 【排雷扣分项】 ---
         Factor(lambda d: d.get('surge_5d', 0) > 28, -20, f_risk, "- 🚫 **短期暴涨**：近5日涨幅过大透支空间，极易高位站岗 (重度扣分)"),
         Factor(lambda d: d.get('consecutive_down', 0) >= 4, -15, f_risk, "- 🔪 **飞刀预警**：近期连续阴线急跌，左侧接飞刀风险大 (重度扣分)"),
@@ -83,5 +103,6 @@ def get_factors_config(f_val: float, f_mom: float, f_rev: float, f_risk: float,
         Factor(lambda d: d.get('upper_shadow_pct', 0) > 35, -15, f_risk, "- ⚠️ **诱多预警**：冲高后大幅跳水，上方抛压极重别上当！"),
         Factor(lambda d: d.get('dist_ma20', 0) > 25, -15, f_risk, "- 🚫 **追高预警**：目前涨得太急离均线太远，随时面临暴跌回调"),
         
-        Factor(lambda d: in_danger and d.get('mcap', 100e8) < 100e8, -8, f_risk, f"- 📅 **财报防雷**：当前属于{danger_label}，小盘股需防业绩变脸 (扣分)")
+        Factor(lambda d: in_danger and d.get('mcap', 100e8) < 100e8, -8, f_risk, f"- 📅 **财报防雷**：当前属于{danger_label}，小盘股需防业绩变脸 (扣分)"),
+        Factor(lambda d: d.get('has_financial_red_flag', False), -25, f_risk, "- 🚨 **财务风险**：速动/现金流/商誉等指标异常，存在爆雷风险 (重度扣分)")
     ]

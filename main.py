@@ -1100,6 +1100,36 @@ class AShareTechnicals:
             if today_is_green and yest_is_red and above_ma5 and no_nuclear and no_trap and vol_shrink:
                 is_first_dip = True
 
+        # --- 【新增：口袋支点检测】 ---
+        is_pivot_point = False
+        if len(df) >= 30:
+            # 检查是否有中期调整（至少前10天有足够振幅）
+            # 检查当前是否放量突破前10日高点
+            prev_10_high = float(df[C.H_HIGH].iloc[-11:-1].max())
+            volume_surge = today[C.H_VOL] > today['MA20_V'] * 1.5
+            price_breakout = today[C.H_CLOSE] > prev_10_high
+            ma_trend = today['MA10'] > today['MA20']
+            
+            if volume_surge and price_breakout and ma_trend:
+                is_pivot_point = True
+
+        # --- 【新增：均线粘合发散检测】 ---
+        is_ma_converging = False
+        is_ma_diverging_up = False
+        if len(df) >= 25:
+            # 计算过去20天均线标准差历史分位
+            ma_spread = (df[['MA5', 'MA10', 'MA20']].std(axis=1) / df['MA20']).iloc[-25:]
+            current_spread = ma_spread.iloc[-1]
+            spread_percentile = (ma_spread < current_spread).sum() / len(ma_spread)
+            
+            # 粘合判断：当前分位 <20%
+            is_ma_converging = bool(spread_percentile < 0.2 and current_spread < 0.02)
+            
+            # 向上发散判断：粘合后今日开始向上
+            if is_ma_converging or ma_spread.iloc[-2] < 0.02:
+                if today['MA5'] > today['MA10'] > today['MA20'] and current_spread > ma_spread.iloc[-2] * 1.2:
+                    is_ma_diverging_up = True
+
         return {
             'is_first_dip': is_first_dip,
             'macd_divergence': macd_divergence,
@@ -1126,6 +1156,16 @@ class AShareTechnicals:
             'low_val': float(today[C.H_LOW]), 'recent_20_low': float(df[C.H_LOW].iloc[-20:].min()),
             'boll_lower': float(today['MA20'] - 2 * df[C.H_CLOSE].iloc[-20:].dropna().std()) if len(df[C.H_CLOSE].iloc[-20:].dropna()) >= 2 else np.nan,
             'close_60d_ago': float(df[C.H_CLOSE].iloc[-60]) if len(df) >= 60 else 0.0,
+            # --- 【新增特征】 ---
+            'is_pivot_point': is_pivot_point,
+            'is_ma_converging': is_ma_converging,
+            'is_ma_diverging_up': is_ma_diverging_up,
+            # 默认基本面数据（等待后续接入真实数据源）
+            'roe': 0.0,
+            'revenue_growth': 0.0,
+            'profit_growth': 0.0,
+            'dividend_yield': 0.0,
+            'has_financial_red_flag': False,
         }
 
 
