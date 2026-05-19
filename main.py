@@ -95,38 +95,61 @@ logging.basicConfig(
 log = logging.getLogger(__name__)
 
 # 全局网络防拦截伪装 (Global WAF Bypass)
-# 强制为指定行情接口的 requests 请求注入现代浏览器的 User-Agent，防止被东方财富/新浪识别为云端爬虫直接掐断连接
-_original_request = requests.Session.request
+# 使用自定义Session类替代monkey patch，避免多线程环境下的竞态风险
+WHITELIST_DOMAINS = ('eastmoney.com', 'dfcfw.com', 'sina.com.cn', 'sinajs.cn', 'money.163.com', '10jqka.com.cn', 'tushare.pro')
 
-def _patched_request(self, method, url, **kwargs):
-    parsed = urlparse(url)
-    hostname = parsed.hostname or ""
-    
-    # 仅针对常见行情域名的白名单进行 UA 伪装，避免污染钉钉等原生请求
-    whitelist_domains = ('eastmoney.com', 'dfcfw.com', 'sina.com.cn', 'sinajs.cn', 'money.163.com', '10jqka.com.cn', 'tushare.pro')
-    needs_patch = any(hostname == d or hostname.endswith('.' + d) for d in whitelist_domains)
-    
-    if needs_patch:
-        log.debug(f"[WAF Patch] 注入浏览器 UA -> {hostname}")
-        headers = kwargs.get('headers', {})
-        if not isinstance(headers, dict):
-            headers = dict(headers)
-        if 'User-Agent' not in headers and 'user-agent' not in headers:
-            headers['User-Agent'] = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36'
-        kwargs['headers'] = headers
-    else:
-        log.debug(f"[WAF Patch] 原生放行 -> {hostname}")
+class WAFBypassSession(requests.Session):
+    def request(self, method, url, **kwargs):
+        parsed = urlparse(url)
+        hostname = parsed.hostname or ""
         
-    kwargs['timeout'] = kwargs.get('timeout', 15.0)
-    return _original_request(self, method, url, **kwargs)
+        needs_patch = any(hostname == d or hostname.endswith('.' + d) for d in WHITELIST_DOMAINS)
+        
+        if needs_patch:
+            log.debug(f"[WAF Patch] 注入浏览器 UA -> {hostname}")
+            headers = kwargs.get('headers', {})
+            if not isinstance(headers, dict):
+                headers = dict(headers)
+            if 'User-Agent' not in headers and 'user-agent' not in headers:
+                headers['User-Agent'] = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36'
+            kwargs['headers'] = headers
+        else:
+            log.debug(f"[WAF Patch] 原生放行 -> {hostname}")
+            
+        kwargs['timeout'] = kwargs.get('timeout', 15.0)
+        return super().request(method, url, **kwargs)
 
-requests.Session.request = _patched_request
+requests.Session = WAFBypassSession
 
 if not os.path.exists(HIST_CACHE_DIR):
     os.makedirs(HIST_CACHE_DIR, exist_ok=True)
 
+def _cleanup_hist_cache(max_age_days: int = 30) -> int:
+    """清理过期的历史缓存文件，防止缓存目录无限膨胀"""
+    cleaned = 0
+    now_ts = time.time()
+    for f in os.listdir(HIST_CACHE_DIR):
+        fpath = os.path.join(HIST_CACHE_DIR, f)
+        if os.path.isfile(fpath):
+            age_days = (now_ts - os.path.getmtime(fpath)) / 86400
+            if age_days > max_age_days:
+                try:
+                    os.remove(fpath)
+                    cleaned += 1
+                except Exception:
+                    pass
+    return cleaned
+
 def _today_str() -> str:
     return datetime.now(TZ_BJS).strftime('%Y-%m-%d')
+
+# 启动时清理过期缓存（仅在缓存文件超过100个时执行清理）
+if os.path.exists(HIST_CACHE_DIR):
+    cache_files = [f for f in os.listdir(HIST_CACHE_DIR) if os.path.isfile(os.path.join(HIST_CACHE_DIR, f))]
+    if len(cache_files) > 100:
+        cleaned = _cleanup_hist_cache()
+        if cleaned > 0:
+            log.info(f"🧹 启动时清理过期缓存文件 {cleaned} 个")
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -166,7 +189,7 @@ def is_recently_pushed(code: str, pushed: dict) -> bool:
     try:
         expire_date = datetime.strptime(pushed[code], '%Y-%m-%d').date()
         today_date = datetime.now(TZ_BJS).date()
-        return today_date < expire_date
+        return today_date <= expire_date
     except Exception:
         return False
 
@@ -247,7 +270,6 @@ def get_score_bucket(score: float) -> str:
 # ═════════════════════════════════════════════════════════════════════════════
 # 3. 数据契约模型 (Data Schema & Models)
 # ═════════════════════════════════════════════════════════════════════════════
-@dataclass(frozen=True)
 class Cols:
     S_PRICE: str = '最新价'
     S_HIGH: str  = '最高'
@@ -1231,9 +1253,6 @@ def apply_scoring(data: dict, now: datetime, m_regime: str, vol_surge: bool, win
                 penalty_score += pts
                 penalty_reasons.append(msg)
             else:
-                # 互斥分组：同组只取最高分的一个因子，防止逻辑重叠导致分值无限拔高
-                if not f.group:
-                    log.warning(f"⚠️ 因子缺失 group 配置，已强制分配到默认组: {f.template[:20]}...")
                 group = f.group if f.group else "DEFAULT_GROUP"
                 if group not in group_scores or pts > group_scores[group]:
                     group_scores[group] = pts
@@ -1317,7 +1336,7 @@ def vectorized_prescreen(pool: pd.DataFrame, is_fallback: bool = False) -> pd.Se
         # [降级补偿] 兜底模式下由于缺失涨跌幅等特征，给予适当的基础分补偿 (由20降为10，防止过度放宽预筛分门槛)
         s += 10.0
         
-    is_etf = pool.index.astype(str).str.startswith(('51', '15', '588', '56'))
+    is_etf = pool[C.S_CODE].astype(str).str.startswith(('51', '15', '588', '56'))
     s += np.where(is_etf, 20.0, 0.0)
         
     return s.clip(lower=0.0, upper=100.0)
@@ -1369,12 +1388,12 @@ def process_stock(row: pd.Series, raw_hist: pd.DataFrame, now: datetime, market_
     data['hot_sector_name'] = hot_sectors_map.get(data['code'], "热门")
     
     atr_stop = data['close_val'] - 2.0 * data['atr_val']
-    stop = max(atr_stop, row[C.S_PRICE] * 0.88)
+    stop = max(atr_stop, row[C.S_PRICE] * 0.92)
     stop = round(stop, 2)
     
     risk_pct = ((row[C.S_PRICE] - stop) / row[C.S_PRICE]) * 100 if row[C.S_PRICE] > 0 else 99
     
-    if risk_pct > 25.0: return None 
+    if risk_pct > 20.0: return None 
 
     return (data, stop, risk_pct) 
 
@@ -1585,7 +1604,7 @@ def get_signals() -> tuple[list[Signal], list, set, int, str, int]:
     except FuturesTimeoutError:
         log.warning("⚠️ 后台运算达到极值，提前熔断保存已有成果。")
     finally:
-        ex2.shutdown(wait=False, cancel_futures=True)
+        ex2.shutdown(wait=True, cancel_futures=True)
 
     confirmed_data.sort(key=lambda x: (x.score, x.code), reverse=True)
     
@@ -1610,7 +1629,6 @@ def get_signals() -> tuple[list[Signal], list, set, int, str, int]:
         expire_dt = now + timedelta(days=cd_days)
         pushed[s.code] = expire_dt.strftime('%Y-%m-%d')
         
-        # 避免一天多次手工运行产生重复的 PENDING 记录，污染账本
         if any(t.get('code') == s.code and t.get('date') == today_str and t.get('status') == 'PENDING' for t in paper_trades):
             continue
             
@@ -1623,6 +1641,20 @@ def get_signals() -> tuple[list[Signal], list, set, int, str, int]:
             'stop': s.stop_loss,
             'status': 'PENDING',
             'triggered_factors': s.reasons
+        })
+    
+    # 【新增】记录候补标的作为负例样本，为AI自进化提供更完整的胜率统计
+    for name, code, score, price in watchlist_data[:20]:
+        if any(t.get('code') == code and t.get('date') == today_str for t in paper_trades):
+            continue
+        paper_trades.append({
+            'date': today_str,
+            'code': code,
+            'name': name,
+            'score_bucket': get_score_bucket(score),
+            'buy_price': price,
+            'status': 'WATCHLIST',
+            'note': '候补标的，未入选决选'
         })
     
     save_paper_trades(paper_trades)
