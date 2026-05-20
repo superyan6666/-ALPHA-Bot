@@ -853,7 +853,7 @@ def send_dingtalk(content: str):
     segments.append(content)
     
     for i, seg in enumerate(segments):
-        title = f'🤖 每日市场简报 ({i+1}/{len(segments)})' if len(segments) > 1 else '🤖 每日市场简报'
+        title = f'🤖 AI每日市场简报 ({i+1}/{len(segments)})' if len(segments) > 1 else '🤖 AI每日市场简报'
         try:
             payload = {'msgtype': 'markdown', 'markdown': {'title': title, 'text': seg}}
             res = requests.post(webhook, json=payload, timeout=10)
