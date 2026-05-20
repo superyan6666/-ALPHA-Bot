@@ -1,0 +1,13 @@
+[Unit]
+Description=ALPHA-Bot Daily Briefing Service
+After=network.target
+
+[Service]
+Type=oneshot
+User=root
+WorkingDirectory=/opt/alpha-bot
+Environment="PATH=/opt/alpha-bot/venv/bin"
+Environment="TZ=Asia/Shanghai"
+ExecStart=/opt/alpha-bot/venv/bin/python /opt/alpha-bot/run_briefing.py
+StandardOutput=append:/var/log/alpha-bot/service.log
+StandardError=append:/var/log/alpha-bot/error.log
