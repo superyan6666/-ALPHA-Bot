@@ -1,35 +1,52 @@
-name: Daily Market Briefing
+name: Daily Market Briefing (Oracle Server)
 
 on:
   schedule:
-    - cron: '30 1 * * *'
-    - cron: '30 13 * * *'
-  workflow_dispatch:
+    - cron: '30 1 * * *'      # 每天 09:30 北京时间
+    - cron: '30 13 * * *'     # 每天 21:30 北京时间
+  workflow_dispatch:         # 手动触发
 
 jobs:
-  run-briefing:
+  run-on-oracle:
     runs-on: ubuntu-latest
+    
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
+      - name: Setup SSH Key
+        uses: webfactory/ssh-agent@v0.9.0
         with:
-          python-version: '3.11'
+          ssh-private-key: ${{ secrets.ORACLE_SSH_KEY }}
 
-      - name: Install system dependencies
+      - name: Add Oracle Server to known hosts
         run: |
-          sudo apt-get update
-          sudo apt-get install -y python3-dev gcc
+          mkdir -p ~/.ssh
+          echo "${{ secrets.ORACLE_HOST_KEY }}" >> ~/.ssh/known_hosts
 
-      - name: Install Python dependencies
+      - name: Sync code to Oracle Server
         run: |
-          pip install --upgrade pip
-          pip install pandas requests akshare yfinance beautifulsoup4 lxml
+          rsync -avz --delete \
+            --exclude='.git' \
+            --exclude='__pycache__' \
+            --exclude='*.pyc' \
+            --exclude='.venv' \
+            ./ opc@${{ secrets.ORACLE_HOST }}:/opt/alpha-bot/
 
-      - name: Run daily briefing
-        env:
-          DINGTALK_WEBHOOK: ${{ secrets.DINGTALK_WEBHOOK }}
-        run: python daily_briefing.py
+      - name: Execute on Oracle Server via SSH
+        run: |
+          ssh opc@${{ secrets.ORACLE_HOST }} '
+            cd /opt/alpha-bot
+            source venv/bin/activate
+            export DINGTALK_WEBHOOK="${{ secrets.DINGTALK_WEBHOOK }}"
+            export TZ="Asia/Shanghai"
+            python daily_briefing.py
+          '
+
+      - name: Fetch logs from Oracle Server
+        if: always()
+        run: |
+          ssh opc@${{ secrets.ORACLE_HOST }} '
+            tail -50 /var/log/alpha-bot/daily_briefing.log 2>/dev/null || echo "No log found"
+          ' >> $GITHUB_STEP_SUMMARY
 
