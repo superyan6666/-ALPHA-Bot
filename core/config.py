@@ -7,9 +7,12 @@ from dataclasses import dataclass
 from typing import Tuple, Optional
 from enum import Enum
 
-from dotenv import load_dotenv
-
-load_dotenv()
+# 尝试加载 .env 文件
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except ImportError:
+    pass
 
 
 class Cols:
