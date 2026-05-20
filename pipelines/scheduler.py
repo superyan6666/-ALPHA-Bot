@@ -1,5 +1,15 @@
 """
 流水线调度器
+
+集成所有优化模块：
+- 因子有效性分析
+- 动态止损
+- 信号过滤
+- 市场状态识别
+- 风险平价配置
+- 增量更新机制
+- 回测框架
+- 超参数优化
 """
 from typing import List, Dict, Any, Optional
 import logging
@@ -23,11 +33,15 @@ class PipelineScheduler:
         self._pipelines: Dict[str, BasePipeline] = {}
         self._enable_optimization = enable_optimization
         self._optimizers = {}
+        self._event_manager = None
+        self._incremental_updater = None
+        self._risk_parity_optimizer = None
         
         self._init_pipelines()
         
         if enable_optimization:
             self._init_optimizers()
+            self._init_event_system()
     
     def _init_pipelines(self):
         """初始化所有流水线"""
@@ -82,16 +96,43 @@ class PipelineScheduler:
                 DynamicStopLossCalculator,
                 SignalFilter,
                 MarketStateDetector,
+                RiskParityOptimizer,
+                Backtester,
+                WalkForwardTester,
+                StrategyParameterOptimizer,
             )
             
             self._optimizers['factor_analyzer'] = FactorEffectivenessAnalyzer()
             self._optimizers['stop_loss'] = DynamicStopLossCalculator()
             self._optimizers['signal_filter'] = SignalFilter()
             self._optimizers['market_detector'] = MarketStateDetector()
+            self._optimizers['risk_parity'] = RiskParityOptimizer()
+            self._optimizers['backtester'] = Backtester()
+            self._optimizers['walk_forward'] = WalkForwardTester()
+            self._optimizers['param_optimizer'] = StrategyParameterOptimizer()
+            
+            self._risk_parity_optimizer = RiskParityOptimizer()
             
             log.info("✅ 优化器模块初始化完成")
         except Exception as e:
             log.warning(f"优化器初始化失败: {e}")
+    
+    def _init_event_system(self):
+        """初始化事件系统"""
+        try:
+            from optimization import (
+                EventManager,
+                IncrementalUpdater,
+                PipelineEventAdapter,
+            )
+            
+            self._event_manager = EventManager()
+            self._incremental_updater = IncrementalUpdater(self._data_lake)
+            self._event_adapter = PipelineEventAdapter(self._event_manager)
+            
+            log.info("✅ 事件系统初始化完成")
+        except Exception as e:
+            log.warning(f"事件系统初始化失败: {e}")
     
     def run_all(self, shared_context: dict = None) -> Dict[str, PipelineResult]:
         """
@@ -116,8 +157,8 @@ class PipelineScheduler:
                 log.info(f"🚀 启动流水线: {pipeline.name}")
                 result = pipeline.run(shared_context)
                 
-                if self._enable_optimization and 'signal_filter' in self._optimizers:
-                    result = self._apply_signal_filter(result, shared_context)
+                if self._enable_optimization:
+                    result = self._apply_optimizations(result, shared_context)
                 
                 results[name] = result
                 log.info(f"✅ {pipeline.name} 完成，产出 {len(result.signals)} 个信号")
@@ -129,6 +170,9 @@ class PipelineScheduler:
                     market_msg=f"执行失败: {str(e)}",
                     meta_info={"error": str(e)}
                 )
+        
+        if self._event_adapter:
+            self._publish_results(results)
         
         return results
     
@@ -149,6 +193,16 @@ class PipelineScheduler:
                 log.debug(f"市场状态检测失败: {e}")
         
         return context
+    
+    def _apply_optimizations(self, result: PipelineResult, context: dict) -> PipelineResult:
+        """应用所有优化"""
+        if 'signal_filter' in self._optimizers:
+            result = self._apply_signal_filter(result, context)
+        
+        if 'risk_parity' in self._optimizers and result.signals:
+            result = self._apply_risk_parity(result, context)
+        
+        return result
     
     def _apply_signal_filter(self, result: PipelineResult, context: dict) -> PipelineResult:
         """应用信号过滤器"""
@@ -176,6 +230,40 @@ class PipelineScheduler:
             log.debug(f"信号过滤失败: {e}")
         
         return result
+    
+    def _apply_risk_parity(self, result: PipelineResult, context: dict) -> PipelineResult:
+        """应用风险平价配置"""
+        optimizer = self._optimizers['risk_parity']
+        
+        sector_map = context.get('sector_map', {})
+        volatilities = context.get('volatilities', {})
+        current_weights = context.get('current_weights', {})
+        
+        try:
+            allocations = optimizer.optimize(
+                result.signals,
+                sector_map=sector_map,
+                volatilities=volatilities,
+                current_weights=current_weights
+            )
+            
+            result.meta_info['allocations'] = allocations
+            
+            log.info(f"⚖️ 风险平价配置完成，{len(allocations)}个资产")
+            
+        except Exception as e:
+            log.debug(f"风险平价配置失败: {e}")
+        
+        return result
+    
+    def _publish_results(self, results: Dict[str, PipelineResult]):
+        """发布结果事件"""
+        for strategy, result in results.items():
+            if self._event_adapter and result.signals:
+                try:
+                    self._event_adapter.publish_signals(result.signals)
+                except Exception as e:
+                    log.debug(f"事件发布失败: {e}")
     
     def run_strategy(self, strategy_type: str, shared_context: dict = None) -> PipelineResult:
         """
@@ -206,8 +294,8 @@ class PipelineScheduler:
         try:
             result = pipeline.run(shared_context)
             
-            if self._enable_optimization and 'signal_filter' in self._optimizers:
-                result = self._apply_signal_filter(result, shared_context)
+            if self._enable_optimization:
+                result = self._apply_optimizations(result, shared_context)
             
             return result
         except Exception as e:
@@ -235,6 +323,87 @@ class PipelineScheduler:
         """运行可转债流水线"""
         return self.run_strategy('cb', shared_context)
     
+    def run_backtest(self, signals: List[Dict], historical_data: Dict) -> dict:
+        """
+        执行回测
+        
+        Args:
+            signals: 信号列表
+            historical_data: 历史数据
+            
+        Returns:
+            回测结果
+        """
+        if 'backtester' not in self._optimizers:
+            return {"error": "回测模块未启用"}
+        
+        try:
+            backtester = self._optimizers['backtester']
+            result = backtester.run_backtest(signals, historical_data)
+            
+            return {
+                'success': True,
+                'result': result.__dict__,
+                'report': backtester.format_result(result)
+            }
+        except Exception as e:
+            return {"error": str(e)}
+    
+    def run_walk_forward(self, signals: List[Dict], historical_data: Dict) -> dict:
+        """
+        执行滚动窗口测试
+        
+        Args:
+            signals: 信号列表
+            historical_data: 历史数据
+            
+        Returns:
+            滚动窗口测试结果
+        """
+        if 'walk_forward' not in self._optimizers:
+            return {"error": "滚动窗口测试模块未启用"}
+        
+        try:
+            wf_tester = self._optimizers['walk_forward']
+            results = wf_tester.run(signals, historical_data)
+            aggregate = wf_tester.aggregate_results(results)
+            
+            return {
+                'success': True,
+                'results': [r.__dict__ for r in results],
+                'aggregate': aggregate
+            }
+        except Exception as e:
+            return {"error": str(e)}
+    
+    def optimize_parameters(self, objective_func: Callable, n_trials: int = 50) -> dict:
+        """
+        执行超参数优化
+        
+        Args:
+            objective_func: 目标函数
+            n_trials: 试验次数
+            
+        Returns:
+            优化结果
+        """
+        if 'param_optimizer' not in self._optimizers:
+            return {"error": "超参数优化模块未启用"}
+        
+        try:
+            optimizer = self._optimizers['param_optimizer']
+            optimizer.setup_default_parameters()
+            result = optimizer.optimize(objective_func, n_trials=n_trials)
+            
+            return {
+                'success': True,
+                'best_params': result.best_params,
+                'best_value': result.best_value,
+                'report': optimizer.format_report(result)
+            }
+        except Exception as e:
+            return {"error": str(e)}
+    
     def list_pipelines(self) -> List[Dict[str, str]]:
         """列出所有流水线"""
         return [
@@ -243,15 +412,7 @@ class PipelineScheduler:
         ]
     
     def get_all_signals(self, results: Dict[str, PipelineResult]) -> List[Any]:
-        """
-        合并所有流水线的信号
-        
-        Args:
-            results: 各流水线执行结果
-            
-        Returns:
-            合并后的信号列表
-        """
+        """合并所有流水线的信号"""
         all_signals = []
         
         for result in results.values():
@@ -292,4 +453,13 @@ class PipelineScheduler:
             if state:
                 return self._optimizers['market_detector'].format_state_report(state)
         return "市场状态检测器未启用"
+    
+    def get_risk_parity_report(self, signals: List, sector_map: Dict) -> str:
+        """获取风险平价配置报告"""
+        if 'risk_parity' in self._optimizers and signals:
+            allocations = self._optimizers['risk_parity'].optimize(
+                signals, sector_map, {}
+            )
+            return self._optimizers['risk_parity'].format_allocation_report(allocations)
+        return "风险平价优化器未启用或无信号"
 

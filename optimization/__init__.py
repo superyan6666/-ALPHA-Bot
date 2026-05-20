@@ -6,6 +6,8 @@
 - 动态止损机制
 - 信号过滤与去重
 - 市场状态识别
+- 风险平价配置
+- 增量更新机制
 """
 from .factor_effectiveness import (
     FactorEffectivenessAnalyzer,
@@ -33,6 +35,22 @@ from .market_state import (
     MarketRegime,
     RegimeProbabilities,
 )
+from .risk_parity import (
+    RiskParityOptimizer,
+    SectorExposureManager,
+    VolatilityTargeting,
+    AssetAllocation,
+    PortfolioConstraints,
+    RiskParityConfig,
+)
+from .incremental import (
+    EventManager,
+    IncrementalUpdater,
+    DataChangeDetector,
+    PipelineEventAdapter,
+    MarketEvent,
+    Subscription,
+)
 
 __all__ = [
     # 因子有效性
@@ -57,5 +75,19 @@ __all__ = [
     'MarketState',
     'MarketRegime',
     'RegimeProbabilities',
+    # 风险平价
+    'RiskParityOptimizer',
+    'SectorExposureManager',
+    'VolatilityTargeting',
+    'AssetAllocation',
+    'PortfolioConstraints',
+    'RiskParityConfig',
+    # 增量更新
+    'EventManager',
+    'IncrementalUpdater',
+    'DataChangeDetector',
+    'PipelineEventAdapter',
+    'MarketEvent',
+    'Subscription',
 ]
 
