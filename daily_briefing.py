@@ -866,16 +866,8 @@ def send_dingtalk(content: str):
         except Exception as e:
             log.error(f"❌ 推送异常: {e}")
 
-if __name__ == '__main__':
-    logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
-    
-    try:
-        file_handler = logging.FileHandler(f'briefing_{_today_str()}.log', encoding='utf-8')
-        file_handler.setFormatter(logging.Formatter('%(asctime)s - %(levelname)s - %(message)s'))
-        logging.getLogger().addHandler(file_handler)
-    except Exception:
-        pass
-    
+def main():
+    """主入口函数，供外部调用"""
     is_trading, trading_msg = is_trading_hours()
     log.info(f"当前状态: {trading_msg}")
     
@@ -886,15 +878,28 @@ if __name__ == '__main__':
         else:
             log.warning(issue)
     
+    data = DataCollector.collect_all()
+    report = BriefingRenderer.render(data)
+    log.info(f"简报长度: {len(report)} 字符")
+    
+    if len(report) > DINGTALK_MAX_LEN:
+        report = truncate_content(report)
+    
+    send_dingtalk(report)
+
+
+if __name__ == '__main__':
+    logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+    
     try:
-        data = DataCollector.collect_all()
-        report = BriefingRenderer.render(data)
-        log.info(f"简报长度: {len(report)} 字符")
-        
-        if len(report) > DINGTALK_MAX_LEN:
-            report = truncate_content(report)
-        
-        send_dingtalk(report)
+        file_handler = logging.FileHandler(f'briefing_{_today_str()}.log', encoding='utf-8')
+        file_handler.setFormatter(logging.Formatter('%(asctime)s - %(levelname)s - %(message)s'))
+        logging.getLogger().addHandler(file_handler)
+    except Exception:
+        pass
+    
+    try:
+        main()
     except Exception as e:
         log.critical(f"简报生成崩溃: {e}", exc_info=True)
 
