@@ -6,9 +6,6 @@ import logging
 
 from core.config import strategy_config
 from pipelines.base import BasePipeline, PipelineResult
-from pipelines.etf import ETFPipeline
-from pipelines.cb import CBPipeline
-from pipelines.sector import SectorPipeline
 
 log = logging.getLogger(__name__)
 
@@ -23,28 +20,48 @@ class PipelineScheduler:
     
     def _init_pipelines(self):
         """初始化所有流水线"""
-        if strategy_config.is_enabled('etf'):
-            self._pipelines['etf'] = ETFPipeline(
-                self._data_lake, 
-                strategy_config.etf
-            )
-            log.info("✅ ETF轮动流水线已注册")
+        try:
+            from .stock import StockPipeline
+            self._pipelines['stock'] = StockPipeline(self._data_lake)
+            log.info("✅ 股票策略流水线已注册")
+        except Exception as e:
+            log.warning(f"股票策略流水线注册失败: {e}")
         
-        if strategy_config.is_enabled('cb'):
-            self._pipelines['cb'] = CBPipeline(
-                self._data_lake,
-                strategy_config.cb
-            )
-            log.info("✅ 可转债流水线已注册")
+        if strategy_config.is_enabled('etf'):
+            try:
+                from .etf import ETFPipeline
+                self._pipelines['etf'] = ETFPipeline(
+                    self._data_lake, 
+                    strategy_config.etf
+                )
+                log.info("✅ ETF轮动流水线已注册")
+            except Exception as e:
+                log.warning(f"ETF轮动流水线注册失败: {e}")
         
         if strategy_config.is_enabled('sector'):
-            self._pipelines['sector'] = SectorPipeline(
-                self._data_lake,
-                strategy_config.sector
-            )
-            log.info("✅ 行业轮动流水线已注册")
+            try:
+                from .sector import SectorPipeline
+                self._pipelines['sector'] = SectorPipeline(
+                    self._data_lake,
+                    strategy_config.sector
+                )
+                log.info("✅ 行业轮动流水线已注册")
+            except Exception as e:
+                log.warning(f"行业轮动流水线注册失败: {e}")
+        
+        if strategy_config.is_enabled('cb'):
+            try:
+                from .cb import CBPipeline
+                self._pipelines['cb'] = CBPipeline(
+                    self._data_lake,
+                    strategy_config.cb
+                )
+                log.info("✅ 可转债流水线已注册")
+            except Exception as e:
+                log.warning(f"可转债流水线注册失败: {e}")
         
         log.info(f"📋 流水线调度器初始化完成，共注册 {len(self._pipelines)} 个流水线")
+        log.info(f"   已注册: {list(self._pipelines.keys())}")
     
     def run_all(self, shared_context: dict = None) -> Dict[str, PipelineResult]:
         """
@@ -83,7 +100,7 @@ class PipelineScheduler:
         运行指定策略流水线
         
         Args:
-            strategy_type: 策略类型
+            strategy_type: 策略类型 (stock/etf/sector/cb)
             shared_context: 共享上下文
             
         Returns:
@@ -100,12 +117,38 @@ class PipelineScheduler:
         if shared_context is None:
             shared_context = {}
         
-        return self._pipelines[strategy_type].run(shared_context)
+        pipeline = self._pipelines[strategy_type]
+        try:
+            return pipeline.run(shared_context)
+        except Exception as e:
+            log.error(f"❌ {pipeline.name} 执行失败: {e}")
+            return PipelineResult(
+                signals=[],
+                watchlist=[],
+                market_msg=f"执行失败: {str(e)}",
+                meta_info={"error": str(e)}
+            )
+    
+    def run_stock(self, shared_context: dict = None) -> PipelineResult:
+        """运行股票策略流水线"""
+        return self.run_strategy('stock', shared_context)
+    
+    def run_etf(self, shared_context: dict = None) -> PipelineResult:
+        """运行ETF轮动流水线"""
+        return self.run_strategy('etf', shared_context)
+    
+    def run_sector(self, shared_context: dict = None) -> PipelineResult:
+        """运行行业轮动流水线"""
+        return self.run_strategy('sector', shared_context)
+    
+    def run_cb(self, shared_context: dict = None) -> PipelineResult:
+        """运行可转债流水线"""
+        return self.run_strategy('cb', shared_context)
     
     def list_pipelines(self) -> List[Dict[str, str]]:
         """列出所有流水线"""
         return [
-            {"name": p.name, "type": name, "enabled": True}
+            {"name": p.name, "type": name, "enabled": "True"}
             for name, p in self._pipelines.items()
         ]
     
@@ -124,7 +167,21 @@ class PipelineScheduler:
         for result in results.values():
             all_signals.extend(result.signals)
         
-        all_signals.sort(key=lambda x: x.score if hasattr(x, 'score') else 0, reverse=True)
+        all_signals.sort(
+            key=lambda x: getattr(x, 'score', 0) if hasattr(x, 'score') else 0, 
+            reverse=True
+        )
         
         return all_signals
+    
+    def get_signal_summary(self, results: Dict[str, PipelineResult]) -> Dict[str, int]:
+        """获取信号汇总"""
+        summary = {}
+        for strategy, result in results.items():
+            summary[strategy] = {
+                "signals": len(result.signals),
+                "watchlist": len(result.watchlist),
+                "message": result.market_msg[:50] + "..." if len(result.market_msg) > 50 else result.market_msg
+            }
+        return summary
 
