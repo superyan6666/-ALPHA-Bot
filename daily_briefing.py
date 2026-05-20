@@ -717,7 +717,7 @@ class BriefingRenderer:
         now = datetime.now(TZ_BJS)
         lines = []
         
-        lines.append(f"## 🤖 AI 每日市场简报\n*{date_str} {now.strftime('%H:%M')} 生成*\n")
+        lines.append(f"## 🤖 A-Bot 每日市场简报\n*{date_str} {now.strftime('%H:%M')} 生成*\n")
         
         time_note = "> 美股数据截至隔夜收盘 | A股数据截至昨日收盘"
         lines.append(time_note)
@@ -853,7 +853,7 @@ def send_dingtalk(content: str):
     segments.append(content)
     
     for i, seg in enumerate(segments):
-        title = f'🤖 AI每日市场简报 ({i+1}/{len(segments)})' if len(segments) > 1 else '🤖 AI每日市场简报'
+        title = f'🤖 A-Bot每日市场简报 ({i+1}/{len(segments)})' if len(segments) > 1 else '🤖 A-Bot每日市场简报'
         try:
             payload = {'msgtype': 'markdown', 'markdown': {'title': title, 'text': seg}}
             res = requests.post(webhook, json=payload, timeout=10)
