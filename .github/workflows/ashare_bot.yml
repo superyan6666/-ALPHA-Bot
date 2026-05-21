@@ -1,11 +1,12 @@
 name: Intraday Right-Side Trading Bot
 
 on:
-  schedule:
-    # 提前至北京时间 14:45 触发 (尾盘买入法)，预留 Github Actions 队列排队延迟
-    - cron: '45 6 * * 1-5'
-    # 提前至北京时间 09:35 触发 (早盘宏观与主线播报)
-    - cron: '35 1 * * 1-5'
+  # 已取消自动调度 - 移除了以下定时任务
+  # schedule:
+  #   # 提前至北京时间 14:45 触发 (尾盘买入法)，预留 Github Actions 队列排队延迟
+  #   - cron: '45 6 * * 1-5'
+  #   # 提前至北京时间 09:35 触发 (早盘宏观与主线播报)
+  #   - cron: '35 1 * * 1-5'
   workflow_dispatch:
     inputs:
       run_mode:
@@ -104,7 +105,7 @@ jobs:
           fi
 
       - name: 保存运行状态与模拟盘账本
-        if: ${{ github.event_name == 'schedule' || inputs.run_mode == 'normal' }} 
+        if: ${{ inputs.run_mode == 'normal' }} 
         uses: stefanzweifel/git-auto-commit-action@v5
         with:
           commit_message: "[bot] 更新推送状态与AI模拟盘账本"
