@@ -65,6 +65,7 @@ jobs:
       - name: 启动监控引擎 / 测试连通性
         env:
           DINGTALK_WEBHOOK: ${{ secrets.DINGTALK_WEBHOOK }}
+          FEISHU_WEBHOOK: ${{ secrets.FEISHU_WEBHOOK }}
           TUSHARE_TOKEN: ${{ secrets.TUSHARE_TOKEN }}
           PUSH_EMPTY_RESULT: ${{ inputs.push_empty == false && 'false' || 'true' }} 
           RUN_MODE: ${{ inputs.run_mode || 'normal' }}
@@ -79,18 +80,41 @@ jobs:
           fi
 
           if [ "$RUN_MODE" == "test_conn" ]; then
-            echo "🔔 检测到测试模式，执行钉钉连通性推送..."
-            # 【逻辑梳理】：采用安全的 Here-Doc 语法，避免 Bash 单双引号转义冲突引发崩溃
+            echo "🔔 检测到测试模式，执行钉钉与飞书连通性测试..."
             python - << 'EOF'
           import os, requests, datetime
-          webhook = os.environ.get('DINGTALK_WEBHOOK')
-          if not webhook:
-              print('❌ 未配置 DINGTALK_WEBHOOK 环境变量')
-              exit(1)
-          now = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-          msg = f'🤖 AI量化打板引擎 连通性测试成功！\n时间: {now}\n状态: GitHub Actions 触发器与网络链路完全畅通。'
-          res = requests.post(webhook, json={'msgtype': 'text', 'text': {'content': msg}}, timeout=10)
-          print('✅ 推送结果:', res.text)
+          
+          def send_test(url, name):
+              if not url:
+                  print(f'⚠️ 未配置 {name} 环境变量')
+                  return
+              now = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+              
+              if "feishu.cn" in url or "larksuite.com" in url:
+                  payload = {
+                      "msg_type": "interactive",
+                      "card": {
+                          "header": {
+                              "title": {"tag": "plain_text", "content": "🤖 AI量化引擎连通性测试"},
+                              "template": "blue"
+                          },
+                          "elements": [{"tag": "markdown", "content": f"飞书通知链路测试成功！\n时间: {now}\n状态: GitHub Actions 触发器已打通。"}]
+                      }
+                  }
+              else:
+                  # 钉钉
+                  payload = {
+                      'msgtype': 'markdown',
+                      'markdown': {
+                          'title': '🤖 AI量化 | 连通性测试',
+                          'text': f'🤖 **AI量化打板引擎** 连通性测试成功！\n\n- 时间: {now}\n- 状态: GitHub Actions 与钉钉链路畅通。'
+                      }
+                  }
+              res = requests.post(url, json=payload, timeout=10)
+              print(f'✅ {name} 推送结果:', res.text)
+
+          send_test(os.environ.get('DINGTALK_WEBHOOK'), 'DINGTALK_WEBHOOK')
+          send_test(os.environ.get('FEISHU_WEBHOOK'), 'FEISHU_WEBHOOK')
           EOF
           elif [ "$RUN_MODE" == "briefing" ]; then
             echo "📊 启动早盘宏观与热门主线播报 Agent..."

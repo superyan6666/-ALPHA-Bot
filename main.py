@@ -44,6 +44,7 @@ class AppConfig:
         self.OFFLINE_MAX_AGE_DAYS = int(self.get('OFFLINE_MAX_AGE_DAYS', 7))
         self.TUSHARE_TOKEN = self.get('TUSHARE_TOKEN', '').strip()
         self.DINGTALK_WEBHOOK = self.get('DINGTALK_WEBHOOK', '')
+        self.FEISHU_WEBHOOK = self.get('FEISHU_WEBHOOK', '')
         self.RUN_MODE = self.get('RUN_MODE', 'normal')
         
     def get(self, key: str, default: Any = None) -> Any:
@@ -1578,9 +1579,14 @@ def get_signals() -> tuple[list[Signal], list, set, int, str, int]:
 # 10. 钉钉网关与推送 (Webhook & Notification)
 # ═════════════════════════════════════════════════════════════════════════════
 def send_dingtalk(signals: list[Signal], watchlist: list, total_pool: int, total_market: int, market_msg: str) -> None:
-    webhook = config.DINGTALK_WEBHOOK
-    if not webhook:
-        log.error("❌ 未配置 DINGTALK_WEBHOOK 环境变量，取消推送！")
+    webhooks = []
+    if config.DINGTALK_WEBHOOK:
+        webhooks.append(config.DINGTALK_WEBHOOK)
+    if config.FEISHU_WEBHOOK:
+        webhooks.append(config.FEISHU_WEBHOOK)
+        
+    if not webhooks:
+        log.error("❌ 未配置任何 Webhook 环境变量，取消推送！")
         return
     
     now_ts = datetime.now(TZ_BJS)
@@ -1692,59 +1698,99 @@ def send_dingtalk(signals: list[Signal], watchlist: list, total_pool: int, total
             "> **如果会，请把你准备买入的金额【再砍掉一半】！投资是为了生活更好，不是花钱找罪受。**"
         )
 
-    try:
-        CHUNK_SIZE = 18000
-        if len(content) <= CHUNK_SIZE:
+    def _send_to_webhook(url: str, msg_title: str, msg_text: str) -> requests.Response:
+        headers = {"Content-Type": "application/json"}
+        if "feishu.cn" in url or "larksuite.com" in url:
+            payload = {
+                "msg_type": "interactive",
+                "card": {
+                    "header": {
+                        "title": {
+                            "tag": "plain_text",
+                            "content": msg_title
+                        },
+                        "template": "blue"
+                    },
+                    "elements": [
+                        {
+                            "tag": "markdown",
+                            "content": msg_text
+                        }
+                    ]
+                }
+            }
+        else:
+            final_title = msg_title if "AI量化" in msg_title else f"🤖 AI量化 | {msg_title}"
+            final_text = msg_text
+            if "AI量化" not in final_text:
+                final_text = f"🤖 **AI量化引擎推送**\n\n{final_text}"
             payload = {
                 'msgtype': 'markdown',
                 'markdown': {
-                    'title': '🤖 AI量化盘后提醒',
-                    'text': content
+                    'title': final_title,
+                    'text': final_text
                 }
             }
-            res = requests.post(webhook, json=payload, timeout=10)
-            res_dict = res.json()
-            
-            if res_dict.get('errcode', 0) != 0:
-                log.error(f"❌ 钉钉接口拒绝推送，请检查「自定义关键词」是否匹配！返回信息: {res_dict}")
-            else:
-                log.info(f"✅ 推送成功 ({len(signals)}正式 / {len(watchlist)}观察)")
+        return requests.post(url, json=payload, headers=headers, timeout=10)
+
+    try:
+        CHUNK_SIZE = 18000
+        if len(content) <= CHUNK_SIZE:
+            for webhook in webhooks:
+                try:
+                    res = _send_to_webhook(webhook, '🤖 AI量化盘后提醒', content)
+                    res_dict = res.json()
+                    is_err = False
+                    if "feishu.cn" in webhook or "larksuite.com" in webhook:
+                        if res_dict.get('code', 0) != 0: is_err = True
+                    else:
+                        if res_dict.get('errcode', 0) != 0: is_err = True
+                        
+                    if is_err:
+                        log.error(f"❌ Webhook 推送失败 ({webhook[:30]}...): {res_dict}")
+                    else:
+                        log.info(f"✅ Webhook 推送成功 ({webhook[:30]}...)")
+                except Exception as e:
+                    log.error(f"❌ Webhook 推送网络异常 ({webhook[:30]}...): {e}")
         else:
             log.warning(f"⚠️ 推送消息长度({len(content)})突破限制，启动分片推送机制...")
             chunks = [content[i:i+CHUNK_SIZE] for i in range(0, len(content), CHUNK_SIZE)]
             
-            # [流控防线] 钉钉限制单机器人 20条/分，极端情况下拦截无休止分片
             if len(chunks) > 3:
                 log.warning(f"⚠️ 预警内容极长 (片段数: {len(chunks)})，强行截断至前 3 篇以防流控！")
                 chunks = chunks[:3]
-                chunks[-1] += "\n\n> ⚠️ *(本文因超出钉钉承载极限，尾部数据已被系统强制截断)*"
+                chunks[-1] += "\n\n> ⚠️ *(本文因超出承载极限，尾部数据已被系统强制截断)*"
                 
             for idx, chunk in enumerate(chunks):
                 text = chunk if idx == 0 else f"_(续上条)_\n\n{chunk}"
-                payload = {
-                    'msgtype': 'markdown',
-                    'markdown': {
-                        'title': f'🤖 AI量化提醒 (Part {idx+1}/{len(chunks)})',
-                        'text': text
-                    }
-                }
-                res = requests.post(webhook, json=payload, timeout=10)
-                if res.json().get('errcode', 0) != 0:
-                    log.error(f"❌ 分片 {idx+1} 推送被拒: {res.json()}")
-                else:
-                    log.info(f"✅ 分片 {idx+1}/{len(chunks)} 推送成功")
-                time.sleep(1) # 避免触发钉钉流控
+                for webhook in webhooks:
+                    try:
+                        res = _send_to_webhook(webhook, f'🤖 AI量化提醒 (Part {idx+1}/{len(chunks)})', text)
+                        res_dict = res.json()
+                        is_err = False
+                        if "feishu.cn" in webhook or "larksuite.com" in webhook:
+                            if res_dict.get('code', 0) != 0: is_err = True
+                        else:
+                            if res_dict.get('errcode', 0) != 0: is_err = True
+                            
+                        if is_err:
+                            log.error(f"❌ 分片 {idx+1} 推送失败 ({webhook[:30]}...): {res_dict}")
+                        else:
+                            log.info(f"✅ 分片 {idx+1}/{len(chunks)} 推送成功 ({webhook[:30]}...)")
+                    except Exception as e:
+                        log.error(f"❌ 分片 {idx+1} 推送网络异常 ({webhook[:30]}...): {e}")
+                time.sleep(1) 
             
     except Exception as e:
-        log.error(f"❌ 推送网络请求失败: {e}")
+        log.error(f"❌ 推送处理流程异常: {e}")
 
 if __name__ == '__main__':
     try:
         config.print_summary(log)
         
         # Check required webhook before running heavy pipeline
-        if not config.DINGTALK_WEBHOOK:
-            log.error("未配置 DINGTALK_WEBHOOK，跳过执行。")
+        if not config.DINGTALK_WEBHOOK and not config.FEISHU_WEBHOOK:
+            log.error("未配置 DINGTALK_WEBHOOK 或 FEISHU_WEBHOOK，跳过执行。")
         else:
             sigs, watch, pushed, pool_size, m_msg, total_mkt = get_signals()
             send_dingtalk(sigs, watch, pool_size, total_mkt, m_msg)
@@ -1752,10 +1798,35 @@ if __name__ == '__main__':
             
     except Exception as e:
         log.critical(f"系统崩溃: {e}", exc_info=True)
-        webhook_url = config.DINGTALK_WEBHOOK
-        if webhook_url:
-            error_msg = f"🚨 **AI量化引擎崩溃告警**\n\n**时间**: {_today_str()}\n**环境**: GitHub Actions\n**异常信息**: {str(e)[:300]}..."
+        webhooks = []
+        if config.DINGTALK_WEBHOOK:
+            webhooks.append(config.DINGTALK_WEBHOOK)
+        if config.FEISHU_WEBHOOK:
+            webhooks.append(config.FEISHU_WEBHOOK)
+            
+        error_msg = f"🚨 **AI量化引擎崩溃告警**\n\n**时间**: {_today_str()}\n**环境**: GitHub Actions\n**异常信息**: {str(e)[:300]}..."
+        for webhook_url in webhooks:
             try:
-                requests.post(webhook_url, json={"msgtype": "markdown", "markdown": {"title": "系统崩溃告警", "text": error_msg}}, timeout=5)
+                headers = {"Content-Type": "application/json"}
+                if "feishu.cn" in webhook_url or "larksuite.com" in webhook_url:
+                    payload = {
+                        "msg_type": "interactive",
+                        "card": {
+                            "header": {
+                                "title": {"tag": "plain_text", "content": "🤖 AI量化引擎崩溃告警"},
+                                "template": "red"
+                            },
+                            "elements": [{"tag": "markdown", "content": error_msg}]
+                        }
+                    }
+                else:
+                    payload = {
+                        "msgtype": "markdown",
+                        "markdown": {
+                            "title": "🤖 AI量化 | 系统崩溃告警",
+                            "text": f"🤖 **AI量化**\n\n{error_msg}"
+                        }
+                    }
+                requests.post(webhook_url, json=payload, headers=headers, timeout=5)
             except:
                 pass
