@@ -81,16 +81,7 @@ jobs:
 
           if [ "$RUN_MODE" == "test_conn" ]; then
             echo "🔔 检测到测试模式，执行钉钉与飞书连通性测试..."
-            python - << 'EOF'
-import datetime
-from main import NotificationGateway
-
-now = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-NotificationGateway.send(
-    "🤖 AI量化引擎连通性测试",
-    f"通知链路测试成功！\n- 时间: {now}\n- 状态: GitHub Actions 触发器已打通。"
-)
-EOF
+            python main.py
           elif [ "$RUN_MODE" == "briefing" ]; then
             echo "📊 启动早盘宏观与热门主线播报 Agent..."
             python daily_briefing.py

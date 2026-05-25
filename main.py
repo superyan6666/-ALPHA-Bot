@@ -2057,8 +2057,14 @@ if __name__ == '__main__':
     try:
         config.print_summary(log)
         
-        # Check required webhook before running heavy pipeline
-        if not config.DINGTALK_WEBHOOK and not config.FEISHU_WEBHOOK:
+        if config.RUN_MODE == 'test_conn':
+            log.info("🔔 检测到测试模式，执行推送连通性测试...")
+            now = datetime.now(TZ_BJS).strftime('%Y-%m-%d %H:%M:%S')
+            NotificationGateway.send(
+                "🤖 AI量化引擎连通性测试",
+                f"通知链路测试成功！\n- 时间: {now}\n- 状态: GitHub Actions 触发器已打通。"
+            )
+        elif not config.DINGTALK_WEBHOOK and not config.FEISHU_WEBHOOK:
             log.error("未配置 DINGTALK_WEBHOOK 或 FEISHU_WEBHOOK，跳过执行。")
         else:
             sigs, watch, pushed, pool_size, m_msg, total_mkt = get_signals()
