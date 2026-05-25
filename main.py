@@ -367,6 +367,9 @@ def load_and_update_paper_trades(df_spot: pd.DataFrame) -> tuple[list, dict]:
 
         active_trades.append(t)
 
+    # [关键修复] 强制将内存中更新后的状态同步持久化回磁盘，防止因 get_signals 提前 return 而丢失历史 trade 状态更新
+    save_paper_trades(active_trades)
+
     return active_trades, stats
 
 def save_paper_trades(trades: list):
