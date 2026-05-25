@@ -114,7 +114,7 @@ def _patched_request(self, method, url, **kwargs):
     hostname = parsed.hostname or ""
     
     # 仅针对常见行情域名的白名单进行 UA 伪装，避免污染钉钉等原生请求
-    whitelist_domains = ('eastmoney.com', 'dfcfw.com', 'sina.com.cn', 'sinajs.cn', 'money.163.com', '10jqka.com.cn', 'tushare.pro')
+    whitelist_domains = ('eastmoney.com', 'dfcfw.com', 'sina.com.cn', 'sinajs.cn', 'money.163.com', '10jqka.com.cn', 'tushare.pro', 'csindex.com.cn', 'szse.cn')
     needs_patch = any(hostname == d or hostname.endswith('.' + d) for d in whitelist_domains)
     
     if needs_patch:
@@ -130,6 +130,10 @@ def _patched_request(self, method, url, **kwargs):
             headers['Referer'] = 'https://finance.sina.com.cn/'
         elif 'tushare.pro' in hostname:
             headers['Referer'] = 'https://www.tushare.pro/'
+        elif 'csindex.com.cn' in hostname:
+            headers['Referer'] = 'https://www.csindex.com.cn/'
+        elif 'szse.cn' in hostname:
+            headers['Referer'] = 'https://www.szse.cn/'
             
         kwargs['headers'] = headers
     else:
