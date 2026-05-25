@@ -1733,7 +1733,7 @@ def send_dingtalk(signals: list[Signal], watchlist: list, total_pool: int, total
                     f"{warn_msg}"
                     f"- **综合评级**：`{s.score}` 分 {s.level}\n"
                     f"- **今日收盘**：`¥{s.price}` ({s.pct_chg})\n\n"
-                    f"![大周期周K线图]({kline_url})\n\n"
+                    f"[📈 点击查看大周期周K线图]({kline_url})\n\n"
                     f"**💡 为什么机器选出它？**\n{s.reasons}\n\n"
                     f"**🛡️ 小白专属操作剧本**\n"
                     f"{s.hold_period_msg}\n"
@@ -1948,132 +1948,7 @@ def get_signals() -> tuple[list[Signal], list, set, int, str, int]:
     save_paper_trades(paper_trades)
 
     return final_confirmed, watchlist_data, pushed, len(pool), m_msg, len(df_clean)
-
-
-# ═════════════════════════════════════════════════════════════════════════════
-# 10. 钉钉网关与推送 (Webhook & Notification)
-# ═════════════════════════════════════════════════════════════════════════════
-def send_dingtalk(signals: list[Signal], watchlist: list, total_pool: int, total_market: int, market_msg: str) -> None:
-    webhooks = []
-    if config.DINGTALK_WEBHOOK:
-        webhooks.append(config.DINGTALK_WEBHOOK)
-    if config.FEISHU_WEBHOOK:
-        webhooks.append(config.FEISHU_WEBHOOK)
-        
-    if not webhooks:
-        log.error("❌ 未配置任何 Webhook 环境变量，取消推送！")
-        return
-    
-    now_ts = datetime.now(TZ_BJS)
-    now_str = now_ts.strftime('%Y-%m-%d %H:%M')
-    run_mode = config.RUN_MODE
-    
-    header = (
-        f"## 🤖 AI量化保姆级盘后总结\n"
-        f"> **{now_str}**\n>\n"
-        f"> ⚠️ **郑重声明**：本报告由量化模型自动生成，仅供技术交流与策略复盘，**绝不构成任何投资建议**。股市有风险，入市需谨慎，盈亏请自负。\n\n"
-    )
-    if run_mode == 'market_only':
-        header = f"## 🤖 AI量化大盘深度体检\n> **{now_str}**\n\n"
-    elif run_mode != 'market_only' and total_market > 0:
-        pass_rate = len(signals) / max(total_pool, 1) * 100 if total_pool > 0 else 0
-        header += f"**🔬 漏斗数据**：全市场白名单 `{total_market}` 只，异动提取 `{total_pool}` 只，完美过线 `{len(signals)}` 只 (B+级以上优选率 **{pass_rate:.1f}%**)\n\n"
-        
-    if market_msg:
-        header += f"{market_msg}\n\n---\n\n"
-
-    if run_mode == 'market_only':
-        content = header + "✅ 大盘分析播报完毕，本次任务短路了全量个股运算。"
-    elif "接口异常" in market_msg or "网络原因失败" in market_msg:
-        content = header + "⚠️ 今日部分个股数据扫描因接口受限中断，已为您提供核心大盘分析参考。"
-    elif not signals and not watchlist:
-        if not PUSH_EMPTY: return
-        content = f"{header}✅ **机器体检结果**：今日未发现形态完全符合安全边际的标的，别乱买，建议**空仓防守**！"
-    else:
-        if signals:
-            MAX_DISPLAY = 5
-            display_signals = signals[:MAX_DISPLAY]
-            hidden_count = len(signals) - len(display_signals)
-            
-            avg_score = sum(s.score for s in display_signals) / len(display_signals)
-            quality_tag = "🥇 **绝佳** (建议严格按剧本执行)" if avg_score >= 80 \
-                else "🥈 **尚可** (建议严格限价，减半仓位)"
-                
-            content = header + f"### 📈 今日核心精选 (Top 5)\n**精选均分：{avg_score:.0f} 分** | {quality_tag}\n\n"
-            
-            cold_gate = (
-                "> **🛑 买入前冷静自检（30秒）**\n"
-                "> 1. 这笔闲钱 **3年内** 绝对不会急用？\n"
-                "> 2. 就算不小心 **亏掉30%** 也不会睡不着？\n"
-                "> 3. 能管住手，**绝不因为下跌反复盯盘**？\n"
-                "> \n"
-                "> *✅ 三项全对 ➡️ 允许按下方计划执行*\n"
-                "> *❌ 有一项不对 ➡️ 请立即把买入预算砍掉一半！*\n\n"
-                "---\n\n"
-            )
-            content += cold_gate
-            
-            parts = []
-            for s in display_signals:
-                warn_msg = "> ⚡ **【风险警示】** 该股为创业板(波动±20%)，心脏不好请务必**缩减仓位**！\n\n" if str(s.code).startswith('300') else ""
-                prefix = '1' if str(s.code).startswith('6') else '0'
-                tdx_market = 'SH' if str(s.code).startswith('6') else 'SZ' 
-                
-                sina_market = 'sh' if str(s.code).startswith('6') else 'sz'
-                code_str = str(s.code)
-                
-                # [性能优化] 彻底消除同步网络检测 (requests.head) 带来的延迟雪崩
-                # 根据号段硬编码直接拦截无法生成周线图的边缘板块
-                if code_str.startswith(('8', '4', '9')):
-                    kline_url = "https://dummyimage.com/800x400/f3f4f6/9ca3af.png&text=No+Chart+Available"
-                else:
-                    kline_url = f"http://image.sinajs.cn/newchart/weekly/n/{sina_market}{s.code}.gif"
-                
-                parts.append(
-                    f"#### 🎯 {s.name} (`{s.code}`)\n"
-                    f"{warn_msg}"
-                    f"- **综合评级**：`{s.score}` 分 {s.level}\n"
-                    f"- **今日收盘**：`¥{s.price}` ({s.pct_chg})\n\n"
-                    f"![大周期周K线图]({kline_url})\n\n"
-                    f"**💡 为什么机器选出它？**\n{s.reasons}\n\n"
-                    f"**🛡️ 小白专属操作剧本**\n"
-                    f"{s.hold_period_msg}\n"
-                    f"{s.money_risk_msg}\n\n"
-                    f"{s.tranche_plan_msg}\n\n"
-                    f"{s.plan_b_msg}\n\n"
-                    f"> **纪律红线**\n"
-                    f"> 🎯 **止盈**：收盘跌破 `¥{s.ma10}` (10日线)，立刻卖出一半保住利润！\n"
-                    f"> 🚫 **防守**：明日开盘直接高开 **> 4%** 说明资金抢跑，直接放弃，绝不追高！\n\n"
-                    f"[🔗 点击跳转东方财富 App 查阅详情](https://quote.eastmoney.com/unify/r/{prefix}.{s.code})\n\n"
-                    f"*📌 通达信看盘助手：复制代码 `{s.code}` 后打开通达信 App 即可弹出*"
-                )
-            content += "\n\n---\n\n".join(parts)
-            
-            if hidden_count > 0:
-                hidden_names = "、".join([f"{s.name}(`{s.code}` **{s.score}分**)" for s in signals[MAX_DISPLAY:]])
-                content += f"\n\n---\n*⚠️ 受限于篇幅，以下 **{hidden_count} 只** 达标个股被系统折叠（已按分数排序）：*\n> {hidden_names}"
-                
-        else:
-            content = header + "✅ 今日未发现 B+ 级以上核心机会，正式推荐列表空仓防守中。\n"
-
-        if watchlist:
-            watch_lines = "\n".join(
-                f"- `{code}` **{name}** (¥{price}) 得分: **{score}**"
-                for name, code, score, price in watchlist[:5]
-            )
-            content += (
-                f"\n\n---\n### 👁️ 候补观察池（只看不买）\n"
-                f"{watch_lines}\n\n"
-                f"*注：以上标的评级不足 70 分，系统判断波动或风险偏大，暂不提供操作剧本。待其评级升至发车线后再考虑介入。*"
-            )
-        
-        content += (
-            "\n\n---\n### 🤔 每日灵魂拷问\n"
-            "如果明天买入的股票跌了 5%，我会焦虑得睡不着觉吗？\n\n"
-            "> **如果会，请把你准备买入的金额【再砍掉一半】！投资是为了生活更好，不是花钱找罪受。**"
-        )
-
-    NotificationGateway.send('🤖 AI量化盘后提醒', content)
+# (Deleted duplicate send_dingtalk function to follow DRY principles)
 
 if __name__ == '__main__':
     try:
