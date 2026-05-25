@@ -82,40 +82,15 @@ jobs:
           if [ "$RUN_MODE" == "test_conn" ]; then
             echo "🔔 检测到测试模式，执行钉钉与飞书连通性测试..."
             python - << 'EOF'
-          import os, requests, datetime
-          
-          def send_test(url, name):
-              if not url:
-                  print(f'⚠️ 未配置 {name} 环境变量')
-                  return
-              now = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-              
-              if "feishu.cn" in url or "larksuite.com" in url:
-                  payload = {
-                      "msg_type": "interactive",
-                      "card": {
-                          "header": {
-                              "title": {"tag": "plain_text", "content": "🤖 AI量化引擎连通性测试"},
-                              "template": "blue"
-                          },
-                          "elements": [{"tag": "markdown", "content": f"飞书通知链路测试成功！\n时间: {now}\n状态: GitHub Actions 触发器已打通。"}]
-                      }
-                  }
-              else:
-                  # 钉钉
-                  payload = {
-                      'msgtype': 'markdown',
-                      'markdown': {
-                          'title': '🤖 AI量化 | 连通性测试',
-                          'text': f'🤖 **AI量化打板引擎** 连通性测试成功！\n\n- 时间: {now}\n- 状态: GitHub Actions 与钉钉链路畅通。'
-                      }
-                  }
-              res = requests.post(url, json=payload, timeout=10)
-              print(f'✅ {name} 推送结果:', res.text)
+import datetime
+from main import NotificationGateway
 
-          send_test(os.environ.get('DINGTALK_WEBHOOK'), 'DINGTALK_WEBHOOK')
-          send_test(os.environ.get('FEISHU_WEBHOOK'), 'FEISHU_WEBHOOK')
-          EOF
+now = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+NotificationGateway.send(
+    "🤖 AI量化引擎连通性测试",
+    f"通知链路测试成功！\n- 时间: {now}\n- 状态: GitHub Actions 触发器已打通。"
+)
+EOF
           elif [ "$RUN_MODE" == "briefing" ]; then
             echo "📊 启动早盘宏观与热门主线播报 Agent..."
             python daily_briefing.py

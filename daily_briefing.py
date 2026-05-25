@@ -7,7 +7,7 @@ from datetime import datetime
 import pandas as pd
 import akshare as ak
 
-from main import fetch_spot, fetch_hot_sectors, fetch_northbound_flow, Cols, TZ_BJS
+from main import fetch_spot, fetch_hot_sectors, fetch_northbound_flow, Cols, TZ_BJS, NotificationGateway
 
 log = logging.getLogger(__name__)
 
@@ -364,69 +364,6 @@ class BriefingRenderer:
         lines.append("\n---\n*<font color=\"#8c8c8c\">Antigravity 机构级量化引擎自动生成</font>*")
         return "\n".join(lines)
 
-def send_notifications(content: str):
-    webhooks = []
-    dt_hook = os.environ.get('DINGTALK_WEBHOOK')
-    fs_hook = os.environ.get('FEISHU_WEBHOOK')
-    if dt_hook: webhooks.append(dt_hook)
-    if fs_hook: webhooks.append(fs_hook)
-    
-    if not webhooks:
-        log.warning("未配置 DINGTALK_WEBHOOK 或 FEISHU_WEBHOOK，仅在控制台输出：\n" + content)
-        return
-        
-    def _send_to_webhook(url: str, msg_title: str, msg_text: str) -> requests.Response:
-        headers = {"Content-Type": "application/json"}
-        if "feishu.cn" in url or "larksuite.com" in url:
-            payload = {
-                "msg_type": "interactive",
-                "card": {
-                    "header": {
-                        "title": {
-                            "tag": "plain_text",
-                            "content": msg_title
-                        },
-                        "template": "blue"
-                    },
-                    "elements": [
-                        {
-                            "tag": "markdown",
-                            "content": msg_text
-                        }
-                    ]
-                }
-            }
-        else:
-            final_title = msg_title if "AI量化" in msg_title else f"🤖 AI量化 | {msg_title}"
-            final_text = msg_text
-            if "AI量化" not in final_text:
-                final_text = f"🤖 **AI量化引擎推送**\n\n{final_text}"
-            payload = {
-                'msgtype': 'markdown',
-                'markdown': {
-                    'title': final_title,
-                    'text': final_text
-                }
-            }
-        return requests.post(url, json=payload, headers=headers, timeout=10)
-        
-    for webhook in webhooks:
-        try:
-            res = _send_to_webhook(webhook, '🤖 AI量化每日市场简报', content)
-            res_dict = res.json()
-            is_err = False
-            if "feishu.cn" in webhook or "larksuite.com" in webhook:
-                if res_dict.get('code', 0) != 0: is_err = True
-            else:
-                if res_dict.get('errcode', 0) != 0: is_err = True
-                
-            if is_err:
-                log.error(f"❌ Webhook 推送失败 ({webhook[:30]}...): {res_dict}")
-            else:
-                log.info(f"✅ Webhook 推送成功 ({webhook[:30]}...)")
-        except Exception as e:
-            log.error(f"❌ Webhook 推送网络异常 ({webhook[:30]}...): {e}")
-
 if __name__ == '__main__':
     logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
     
@@ -441,6 +378,6 @@ if __name__ == '__main__':
     try:
         report = BriefingRenderer.render()
         log.info(f"生成简报如下:\n{report}")
-        send_notifications(report)
+        NotificationGateway.send('🤖 AI量化每日市场简报', report)
     except Exception as e:
         log.critical(f"简报生成崩溃: {e}", exc_info=True)

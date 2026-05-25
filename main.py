@@ -19,6 +19,9 @@ from concurrent.futures import ThreadPoolExecutor, as_completed, TimeoutError as
 from factors_config import Factor, get_factors_config
 # 导入区域结束
 
+class ConfigurationError(ValueError):
+    pass
+
 # ═════════════════════════════════════════════════════════════════════════════
 # 1. 环境与核心配置 (Environment & Config)
 # ═════════════════════════════════════════════════════════════════════════════
@@ -45,7 +48,14 @@ class AppConfig:
         self.TUSHARE_TOKEN = self.get('TUSHARE_TOKEN', '').strip()
         self.DINGTALK_WEBHOOK = self.get('DINGTALK_WEBHOOK', '')
         self.FEISHU_WEBHOOK = self.get('FEISHU_WEBHOOK', '')
+        self.NOTIFY_SEC_KEYWORD = self.get('NOTIFY_SEC_KEYWORD', 'AI量化').strip()
         self.RUN_MODE = self.get('RUN_MODE', 'normal')
+        
+        # 校验错配：防止用户将飞书链接错填入钉钉变量，或将钉钉链接错填入飞书变量
+        if self.DINGTALK_WEBHOOK and ("feishu.cn" in self.DINGTALK_WEBHOOK or "larksuite.com" in self.DINGTALK_WEBHOOK):
+            raise ConfigurationError("ConfigurationError: DINGTALK_WEBHOOK contains Feishu URL. Please check your configuration!")
+        if self.FEISHU_WEBHOOK and ("oapi.dingtalk.com" in self.FEISHU_WEBHOOK):
+            raise ConfigurationError("ConfigurationError: FEISHU_WEBHOOK contains DingTalk URL. Please check your configuration!")
         
     def get(self, key: str, default: Any = None) -> Any:
         if key not in self._env:
@@ -108,12 +118,19 @@ def _patched_request(self, method, url, **kwargs):
     needs_patch = any(hostname == d or hostname.endswith('.' + d) for d in whitelist_domains)
     
     if needs_patch:
-        log.debug(f"[WAF Patch] 注入浏览器 UA -> {hostname}")
         headers = kwargs.get('headers', {})
         if not isinstance(headers, dict):
             headers = dict(headers)
-        if 'User-Agent' not in headers and 'user-agent' not in headers:
-            headers['User-Agent'] = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36'
+        headers['User-Agent'] = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36'
+        
+        # 针对特定域名强行添加 Referer 以通过防盗链/WAF 检测
+        if 'eastmoney.com' in hostname or 'dfcfw.com' in hostname:
+            headers['Referer'] = 'https://quote.eastmoney.com/'
+        elif 'sina.com.cn' in hostname or 'sinajs.cn' in hostname:
+            headers['Referer'] = 'https://finance.sina.com.cn/'
+        elif 'tushare.pro' in hostname:
+            headers['Referer'] = 'https://www.tushare.pro/'
+            
         kwargs['headers'] = headers
     else:
         log.debug(f"[WAF Patch] 原生放行 -> {hostname}")
@@ -122,6 +139,128 @@ def _patched_request(self, method, url, **kwargs):
     return _original_request(self, method, url, **kwargs)
 
 requests.Session.request = _patched_request
+
+# ═════════════════════════════════════════════════════════════════════════════
+# 1.5 统一通知网关 (Unified Notification Gateway)
+# ═════════════════════════════════════════════════════════════════════════════
+class NotificationGateway:
+    @classmethod
+    def send(cls, title: str, content: str, template: str = "blue") -> None:
+        webhooks = []
+        if config.DINGTALK_WEBHOOK:
+            webhooks.append((config.DINGTALK_WEBHOOK, "dingtalk"))
+        if config.FEISHU_WEBHOOK:
+            webhooks.append((config.FEISHU_WEBHOOK, "feishu"))
+            
+        if not webhooks:
+            log.error("❌ 未配置任何 Webhook 环境变量，取消推送！")
+            return
+            
+        CHUNK_SIZE = 18000
+        if len(content) <= CHUNK_SIZE:
+            chunks = [content]
+        else:
+            log.warning(f"⚠️ 推送消息长度({len(content)})突破限制，启动分片推送机制...")
+            chunks = [content[i:i+CHUNK_SIZE] for i in range(0, len(content), CHUNK_SIZE)]
+            if len(chunks) > 3:
+                log.warning(f"⚠️ 预警内容极长 (片段数: {len(chunks)})，强行截断至前 3 篇以防流控！")
+                chunks = chunks[:3]
+                chunks[-1] += "\n\n> ⚠️ *(本文因超出承载极限，尾部数据已被系统强制截断)*"
+                
+        for idx, chunk in enumerate(chunks):
+            if len(chunks) > 1:
+                chunk_title = f"{title} (Part {idx+1}/{len(chunks)})"
+                chunk_text = chunk if idx == 0 else f"_(续上条)_\n\n{chunk}"
+            else:
+                chunk_title = title
+                chunk_text = chunk
+                
+            for webhook_url, platform in webhooks:
+                cls._send_with_retry(webhook_url, platform, chunk_title, chunk_text, template)
+                
+            if idx < len(chunks) - 1:
+                time.sleep(1.0)
+
+    @classmethod
+    def _send_with_retry(cls, url: str, platform: str, title: str, text: str, template: str = "blue") -> None:
+        sec_keyword = getattr(config, 'NOTIFY_SEC_KEYWORD', 'AI量化')
+        headers = {"Content-Type": "application/json"}
+        
+        final_title = title if sec_keyword in title else f"{sec_keyword} | {title}"
+        final_text = text
+        if sec_keyword not in final_text:
+            final_text = f"🤖 **{sec_keyword}推送**\n\n{final_text}"
+            
+        if platform == "feishu":
+            payload = {
+                "msg_type": "interactive",
+                "card": {
+                    "header": {
+                        "title": {
+                            "tag": "plain_text",
+                            "content": final_title
+                        },
+                        "template": template
+                    },
+                    "elements": [
+                        {
+                            "tag": "markdown",
+                            "content": final_text
+                        }
+                    ]
+                }
+            }
+        else:
+            payload = {
+                'msgtype': 'markdown',
+                'markdown': {
+                    'title': final_title,
+                    'text': final_text
+                }
+            }
+            
+        max_attempts = 2
+        for attempt in range(1, max_attempts + 1):
+            try:
+                res = requests.post(url, json=payload, headers=headers, timeout=10.0)
+                if res.status_code == 502:
+                    raise requests.exceptions.HTTPError("502 Server Error: Bad Gateway", response=res)
+                res.raise_for_status()
+                
+                res_dict = res.json()
+                is_err = False
+                if platform == "feishu":
+                    if res_dict.get('code', 0) != 0:
+                        is_err = True
+                else:
+                    if res_dict.get('errcode', 0) != 0:
+                        is_err = True
+                        
+                if is_err:
+                    log.error(f"❌ Webhook 推送失败 ({url[:30]}...): {res_dict}")
+                else:
+                    log.info(f"✅ Webhook 推送成功 ({url[:30]}...)")
+                break
+                
+            except (requests.exceptions.RequestException, requests.exceptions.HTTPError) as e:
+                is_retryable = False
+                if isinstance(e, requests.exceptions.Timeout):
+                    is_retryable = True
+                elif isinstance(e, requests.exceptions.HTTPError) and e.response is not None and e.response.status_code == 502:
+                    is_retryable = True
+                elif isinstance(e, requests.exceptions.ConnectionError):
+                    is_retryable = True
+                    
+                if is_retryable and attempt < max_attempts:
+                    log.warning(f"⚠️ Webhook 推送尝试 {attempt} 失败 (原因: {e})，正在进行重试...")
+                    time.sleep(1.0)
+                    continue
+                else:
+                    log.error(f"❌ Webhook 推送网络异常 ({url[:30]}...) (尝试 {attempt}/{max_attempts}): {e}")
+                    break
+            except Exception as e:
+                log.error(f"❌ Webhook 推送未知异常 ({url[:30]}...): {e}")
+                break
 
 if not os.path.exists(HIST_CACHE_DIR):
     os.makedirs(HIST_CACHE_DIR, exist_ok=True)
@@ -584,6 +723,8 @@ class DataProxy:
     @retry(times=3, delay=2)
     def _fetch_hist_akshare(self, code, start, end):
         try:
+            # 引入随机微型延迟 (0.1s ~ 0.4s) 以平滑并发请求，避免触发 WAF 行情接口封锁限制
+            time.sleep(random.uniform(0.1, 0.4))
             df = ak.stock_zh_a_hist(symbol=code, period='daily', start_date=start, end_date=end, adjust='qfq')
             if df is not None and not df.empty:
                 return df[list(Config.HIST_COLS)].copy()
@@ -744,16 +885,27 @@ class DataProxy:
     def get_core_pool(self) -> set:
         pool = set()
         
-        # 1. 优先使用 Akshare 常规源
-        try:
-            for idx in ["000300", "000905", "000852", "399006"]:
-                df = ak.index_stock_cons(symbol=idx)
+        # 1. 优先使用 Akshare 常规源与 CSIndex 降级源
+        for idx in ["000300", "000905", "000852", "399006"]:
+            try:
+                df = None
+                try:
+                    df = ak.index_stock_cons(symbol=idx)
+                except Exception as ex_normal:
+                    log.debug(f"Akshare 常规 index_stock_cons 接口失效 ({idx}): {ex_normal}，尝试中证/深证备用源...")
+                    try:
+                        df = ak.index_stock_cons_csindex(symbol=idx)
+                    except Exception as ex_cs:
+                        log.debug(f"Akshare csindex 降级接口也失效 ({idx}): {ex_cs}")
+                
                 if df is not None and not df.empty:
                     col = next((c for c in df.columns if '代码' in c), None)
-                    if col: pool.update(df[col].astype(str).str.zfill(6).tolist())
-            if pool: return pool
-        except Exception as e:
-            log.warning(f"Akshare 获取核心成分股池失败: {e}，尝试切换 Tushare 备用源...")
+                    if col: 
+                        pool.update(df[col].astype(str).str.zfill(6).tolist())
+            except Exception as e:
+                log.warning(f"Akshare 获取指数 {idx} 成分股失败: {e}")
+                
+        if pool: return pool
 
         # 2. 降级使用 Tushare
         if self.ts_pro:
@@ -764,7 +916,7 @@ class DataProxy:
                         pool.update(df['con_code'].str.slice(0, 6).tolist())
                 if pool: return pool
             except Exception as e:
-                log.debug(f"Tushare 获取成分股失败: {e}")
+                log.warning(f"Tushare 获取成分股失败: {e}")
                 
         # 3. 终极兜底：静态核心50池，防止全市场扫描导致性能爆炸
         log.warning("⚠️ 核心池所有动态接口失效，已降级为静态核心50股票池！")
@@ -1414,6 +1566,207 @@ def extract_market_context(df_raw: pd.DataFrame, c_conf: Config) -> tuple[pd.Dat
     df = df[~df[C.S_NAME].str.contains('ST|退')]
     return df, market_ok, market_msg, index_ret, market_overheated, market_regime, vol_surge
 
+# ═════════════════════════════════════════════════════════════════════════════
+# 10. 统一通知网关 (Unified Notification Gateway)
+# ═════════════════════════════════════════════════════════════════════════════
+class NotificationGateway:
+    @staticmethod
+    def _send_to_webhook(url: str, is_feishu: bool, msg_title: str, msg_text: str, sec_keyword: str, template: str = "blue") -> requests.Response:
+        headers = {"Content-Type": "application/json"}
+        if is_feishu:
+            payload = {
+                "msg_type": "interactive",
+                "card": {
+                    "header": {
+                        "title": {"tag": "plain_text", "content": msg_title},
+                        "template": template
+                    },
+                    "elements": [{"tag": "markdown", "content": msg_text}]
+                }
+            }
+        else:
+            final_title = msg_title if sec_keyword in msg_title else f"{sec_keyword} | {msg_title}"
+            final_text = msg_text
+            if sec_keyword not in final_text:
+                final_text = f"### {sec_keyword}\n\n{final_text}"
+            payload = {
+                'msgtype': 'markdown',
+                'markdown': {
+                    'title': final_title,
+                    'text': final_text
+                }
+            }
+            
+        # 异常与超时重试 (最高尝试2次)
+        for attempt in range(2):
+            try:
+                res = requests.post(url, json=payload, headers=headers, timeout=10)
+                res.raise_for_status()
+                return res
+            except Exception as e:
+                if attempt == 1:
+                    raise e
+                time.sleep(1)
+        raise RuntimeError("Push failed after retries")
+
+    @classmethod
+    def send(cls, title: str, content: str, template: str = "blue") -> None:
+        webhooks = []
+        if config.DINGTALK_WEBHOOK:
+            webhooks.append((config.DINGTALK_WEBHOOK, False, "钉钉"))
+        if config.FEISHU_WEBHOOK:
+            webhooks.append((config.FEISHU_WEBHOOK, True, "飞书"))
+            
+        if not webhooks:
+            log.warning("⚠️ 未配置任何 Webhook 环境变量 (DINGTALK_WEBHOOK / FEISHU_WEBHOOK)，通知已跳过！")
+            return
+            
+        sec_keyword = config.NOTIFY_SEC_KEYWORD
+        CHUNK_SIZE = 18000
+        chunks = [content[i:i+CHUNK_SIZE] for i in range(0, len(content), CHUNK_SIZE)]
+        
+        if len(chunks) > 3:
+            log.warning(f"⚠️ 推送消息过长 (片段数: {len(chunks)})，强行截断至前 3 篇以防流控！")
+            chunks = chunks[:3]
+            chunks[-1] += f"\n\n> ⚠️ *(本文因超出承载极限，尾部数据已被系统强制截断)*"
+            
+        for idx, chunk in enumerate(chunks):
+            text = chunk if idx == 0 else f"_(续上条)_\n\n{chunk}"
+            msg_title = title if len(chunks) == 1 else f"{title} (Part {idx+1}/{len(chunks)})"
+            
+            for url, is_feishu, name in webhooks:
+                try:
+                    res = cls._send_to_webhook(url, is_feishu, msg_title, text, sec_keyword, template)
+                    res_dict = res.json()
+                    
+                    is_err = False
+                    if is_feishu:
+                        if res_dict.get('code', 0) != 0: is_err = True
+                    else:
+                        if res_dict.get('errcode', 0) != 0: is_err = True
+                        
+                    if is_err:
+                        log.error(f"❌ {name} 推送接口拒绝: {res_dict}")
+                    else:
+                        log.info(f"✅ {name} 推送成功")
+                except Exception as e:
+                    log.error(f"❌ {name} 推送失败 (已隔离保护): {e}")
+            
+            if idx < len(chunks) - 1:
+                time.sleep(1)
+
+def send_dingtalk(signals: list[Signal], watchlist: list, total_pool: int, total_market: int, market_msg: str) -> None:
+    now_ts = datetime.now(TZ_BJS)
+    now_str = now_ts.strftime('%Y-%m-%d %H:%M')
+    run_mode = config.RUN_MODE
+    
+    header = (
+        f"## 🤖 AI量化保姆级盘后总结\n"
+        f"> **{now_str}**\n>\n"
+        f"> ⚠️ **郑重声明**：本报告由量化模型自动生成，仅供技术交流与策略复盘，**绝不构成任何投资建议**。股市有风险，入市需谨慎，盈亏请自负。\n\n"
+    )
+    if run_mode == 'market_only':
+        header = f"## 🤖 AI量化大盘深度体检\n> **{now_str}**\n\n"
+    elif run_mode != 'market_only' and total_market > 0:
+        pass_rate = len(signals) / max(total_pool, 1) * 100 if total_pool > 0 else 0
+        header += f"**🔬 漏斗数据**：全市场白名单 `{total_market}` 只，异动提取 `{total_pool}` 只，完美过线 `{len(signals)}` 只 (B+级以上优选率 **{pass_rate:.1f}%**)\n\n"
+        
+    if market_msg:
+        header += f"{market_msg}\n\n---\n\n"
+
+    if run_mode == 'market_only':
+        content = header + "✅ 大盘分析播报完毕，本次任务短路了全量个股运算。"
+    elif "接口异常" in market_msg or "网络原因失败" in market_msg:
+        content = header + "⚠️ 今日部分个股数据扫描因接口受限中断，已为您提供核心大盘分析参考。"
+    elif not signals and not watchlist:
+        if not PUSH_EMPTY: return
+        content = f"{header}✅ **机器体检结果**：今日未发现形态完全符合安全边际的标的，别乱买，建议**空仓防守**！"
+    else:
+        if signals:
+            MAX_DISPLAY = 5
+            display_signals = signals[:MAX_DISPLAY]
+            hidden_count = len(signals) - len(display_signals)
+            
+            avg_score = sum(s.score for s in display_signals) / len(display_signals)
+            quality_tag = "🥇 **绝佳** (建议严格按剧本执行)" if avg_score >= 80 \
+                else "🥈 **尚可** (建议严格限价，减半仓位)"
+                
+            content = header + f"### 📈 今日核心精选 (Top 5)\n**精选均分：{avg_score:.0f} 分** | {quality_tag}\n\n"
+            
+            cold_gate = (
+                "> **🛑 买入前冷静自检（30秒）**\n"
+                "> 1. 这笔闲钱 **3年内** 绝对不会急用？\n"
+                "> 2. 就算不小心 **亏掉30%** 也不会睡不着？\n"
+                "> 3. 能管住手，**绝不因为下跌反复盯盘**？\n"
+                "> \n"
+                "> *✅ 三项全对 ➡️ 允许按下方计划执行*\n"
+                "> *❌ 有一项不对 ➡️ 请立即把买入预算砍掉一半！*\n\n"
+                "---\n\n"
+            )
+            content += cold_gate
+            
+            parts = []
+            for s in display_signals:
+                warn_msg = "> ⚡ **【风险警示】** 该股为创业板(波动±20%)，心脏不好请务必**缩减仓位**！\n\n" if str(s.code).startswith('300') else ""
+                prefix = '1' if str(s.code).startswith('6') else '0'
+                tdx_market = 'SH' if str(s.code).startswith('6') else 'SZ' 
+                
+                sina_market = 'sh' if str(s.code).startswith('6') else 'sz'
+                code_str = str(s.code)
+                
+                # [性能优化] 彻底消除同步网络检测 (requests.head) 带来的延迟雪崩
+                # 根据号段硬编码直接拦截无法生成周线图的边缘板块
+                if code_str.startswith(('8', '4', '9')):
+                    kline_url = "https://dummyimage.com/800x400/f3f4f6/9ca3af.png&text=No+Chart+Available"
+                else:
+                    kline_url = f"http://image.sinajs.cn/newchart/weekly/n/{sina_market}{s.code}.gif"
+                
+                parts.append(
+                    f"#### 🎯 {s.name} (`{s.code}`)\n"
+                    f"{warn_msg}"
+                    f"- **综合评级**：`{s.score}` 分 {s.level}\n"
+                    f"- **今日收盘**：`¥{s.price}` ({s.pct_chg})\n\n"
+                    f"![大周期周K线图]({kline_url})\n\n"
+                    f"**💡 为什么机器选出它？**\n{s.reasons}\n\n"
+                    f"**🛡️ 小白专属操作剧本**\n"
+                    f"{s.hold_period_msg}\n"
+                    f"{s.money_risk_msg}\n\n"
+                    f"{s.tranche_plan_msg}\n\n"
+                    f"{s.plan_b_msg}\n\n"
+                    f"> **纪律红线**\n"
+                    f"> 🎯 **止盈**：收盘跌破 `¥{s.ma10}` (10日线)，立刻卖出一半保住利润！\n"
+                    f"> 🚫 **防守**：明日开盘直接高开 **> 4%** 说明资金抢跑，直接放弃，绝不追高！\n\n"
+                    f"[🔗 点击跳转东方财富 App 查阅详情](https://quote.eastmoney.com/unify/r/{prefix}.{s.code})\n\n"
+                    f"*📌 通达信看盘助手：复制代码 `{s.code}` 后打开通达信 App 即可弹出*"
+                )
+            content += "\n\n---\n\n".join(parts)
+            
+            if hidden_count > 0:
+                hidden_names = "、".join([f"{s.name}(`{s.code}` **{s.score}分**)" for s in signals[MAX_DISPLAY:]])
+                content += f"\n\n---\n*⚠️ 受限于篇幅，以下 **{hidden_count} 只** 达标个股被系统折叠（已按分数排序）：*\n> {hidden_names}"
+                
+        else:
+            content = header + "✅ 今日未发现 B+ 级以上核心机会，正式推荐列表空仓防守中。\n"
+
+        if watchlist:
+            watch_lines = "\n".join(
+                f"- `{code}` **{name}** (¥{price}) 得分: **{score}**"
+                for name, code, score, price in watchlist[:5]
+            )
+            content += (
+                f"\n\n---\n### 👁️ 候补观察池（只看不买）\n"
+                f"{watch_lines}\n\n"
+                f"*注：以上标的评级不足 70 分，系统判断波动或风险偏大，暂不提供操作剧本。待其评级升至发车线后再考虑介入。*"
+            )
+        
+        content += (
+            "\n\n---\n### 🤔 每日灵魂拷问\n"
+            "如果明天买入的股票跌了 5%，我会焦虑得睡不着觉吗？\n\n"
+            "> **如果会，请把你准备买入的金额【再砍掉一半】！投资是为了生活更好，不是花钱找罪受。**"
+        )
+        
+    NotificationGateway.send('🤖 AI量化盘后提醒', content)
+
 def get_signals() -> tuple[list[Signal], list, set, int, str, int]:
     now = datetime.now(TZ_BJS)
     
@@ -1474,10 +1827,10 @@ def get_signals() -> tuple[list[Signal], list, set, int, str, int]:
     
     if pool.empty: return [], [], pushed, len(df_clean), m_msg, len(df_clean)
     
-    if len(pool) > 400:
-        log.info(f"💡 触发防爆流截断，基于 Spot 截面数据执行廉价预筛分，保留前 400 只高潜标的参与决选。")
+    if len(pool) > 80:
+        log.info(f"💡 触发防爆流截断，基于 Spot 截面数据执行廉价预筛分，保留前 80 只高潜标的参与决选。")
         pool['_pre_score'] = vectorized_prescreen(pool, is_fallback)
-        pool = pool.sort_values(by='_pre_score', ascending=False).head(400)
+        pool = pool.sort_values(by='_pre_score', ascending=False).head(80)
         pool = pool.drop(columns=['_pre_score'])
         
     # [风控守门人] 全局 NaN 空洞扫描
@@ -1698,91 +2051,7 @@ def send_dingtalk(signals: list[Signal], watchlist: list, total_pool: int, total
             "> **如果会，请把你准备买入的金额【再砍掉一半】！投资是为了生活更好，不是花钱找罪受。**"
         )
 
-    def _send_to_webhook(url: str, msg_title: str, msg_text: str) -> requests.Response:
-        headers = {"Content-Type": "application/json"}
-        if "feishu.cn" in url or "larksuite.com" in url:
-            payload = {
-                "msg_type": "interactive",
-                "card": {
-                    "header": {
-                        "title": {
-                            "tag": "plain_text",
-                            "content": msg_title
-                        },
-                        "template": "blue"
-                    },
-                    "elements": [
-                        {
-                            "tag": "markdown",
-                            "content": msg_text
-                        }
-                    ]
-                }
-            }
-        else:
-            final_title = msg_title if "AI量化" in msg_title else f"🤖 AI量化 | {msg_title}"
-            final_text = msg_text
-            if "AI量化" not in final_text:
-                final_text = f"🤖 **AI量化引擎推送**\n\n{final_text}"
-            payload = {
-                'msgtype': 'markdown',
-                'markdown': {
-                    'title': final_title,
-                    'text': final_text
-                }
-            }
-        return requests.post(url, json=payload, headers=headers, timeout=10)
-
-    try:
-        CHUNK_SIZE = 18000
-        if len(content) <= CHUNK_SIZE:
-            for webhook in webhooks:
-                try:
-                    res = _send_to_webhook(webhook, '🤖 AI量化盘后提醒', content)
-                    res_dict = res.json()
-                    is_err = False
-                    if "feishu.cn" in webhook or "larksuite.com" in webhook:
-                        if res_dict.get('code', 0) != 0: is_err = True
-                    else:
-                        if res_dict.get('errcode', 0) != 0: is_err = True
-                        
-                    if is_err:
-                        log.error(f"❌ Webhook 推送失败 ({webhook[:30]}...): {res_dict}")
-                    else:
-                        log.info(f"✅ Webhook 推送成功 ({webhook[:30]}...)")
-                except Exception as e:
-                    log.error(f"❌ Webhook 推送网络异常 ({webhook[:30]}...): {e}")
-        else:
-            log.warning(f"⚠️ 推送消息长度({len(content)})突破限制，启动分片推送机制...")
-            chunks = [content[i:i+CHUNK_SIZE] for i in range(0, len(content), CHUNK_SIZE)]
-            
-            if len(chunks) > 3:
-                log.warning(f"⚠️ 预警内容极长 (片段数: {len(chunks)})，强行截断至前 3 篇以防流控！")
-                chunks = chunks[:3]
-                chunks[-1] += "\n\n> ⚠️ *(本文因超出承载极限，尾部数据已被系统强制截断)*"
-                
-            for idx, chunk in enumerate(chunks):
-                text = chunk if idx == 0 else f"_(续上条)_\n\n{chunk}"
-                for webhook in webhooks:
-                    try:
-                        res = _send_to_webhook(webhook, f'🤖 AI量化提醒 (Part {idx+1}/{len(chunks)})', text)
-                        res_dict = res.json()
-                        is_err = False
-                        if "feishu.cn" in webhook or "larksuite.com" in webhook:
-                            if res_dict.get('code', 0) != 0: is_err = True
-                        else:
-                            if res_dict.get('errcode', 0) != 0: is_err = True
-                            
-                        if is_err:
-                            log.error(f"❌ 分片 {idx+1} 推送失败 ({webhook[:30]}...): {res_dict}")
-                        else:
-                            log.info(f"✅ 分片 {idx+1}/{len(chunks)} 推送成功 ({webhook[:30]}...)")
-                    except Exception as e:
-                        log.error(f"❌ 分片 {idx+1} 推送网络异常 ({webhook[:30]}...): {e}")
-                time.sleep(1) 
-            
-    except Exception as e:
-        log.error(f"❌ 推送处理流程异常: {e}")
+    NotificationGateway.send('🤖 AI量化盘后提醒', content)
 
 if __name__ == '__main__':
     try:
@@ -1798,35 +2067,5 @@ if __name__ == '__main__':
             
     except Exception as e:
         log.critical(f"系统崩溃: {e}", exc_info=True)
-        webhooks = []
-        if config.DINGTALK_WEBHOOK:
-            webhooks.append(config.DINGTALK_WEBHOOK)
-        if config.FEISHU_WEBHOOK:
-            webhooks.append(config.FEISHU_WEBHOOK)
-            
         error_msg = f"🚨 **AI量化引擎崩溃告警**\n\n**时间**: {_today_str()}\n**环境**: GitHub Actions\n**异常信息**: {str(e)[:300]}..."
-        for webhook_url in webhooks:
-            try:
-                headers = {"Content-Type": "application/json"}
-                if "feishu.cn" in webhook_url or "larksuite.com" in webhook_url:
-                    payload = {
-                        "msg_type": "interactive",
-                        "card": {
-                            "header": {
-                                "title": {"tag": "plain_text", "content": "🤖 AI量化引擎崩溃告警"},
-                                "template": "red"
-                            },
-                            "elements": [{"tag": "markdown", "content": error_msg}]
-                        }
-                    }
-                else:
-                    payload = {
-                        "msgtype": "markdown",
-                        "markdown": {
-                            "title": "🤖 AI量化 | 系统崩溃告警",
-                            "text": f"🤖 **AI量化**\n\n{error_msg}"
-                        }
-                    }
-                requests.post(webhook_url, json=payload, headers=headers, timeout=5)
-            except:
-                pass
+        NotificationGateway.send("🚨 AI量化引擎崩溃告警", error_msg, template="red")
