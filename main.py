@@ -1810,15 +1810,25 @@ def get_signals() -> tuple[list[Signal], list, set, int, str, int]:
         df_clean = df_clean[df_clean[C.S_CODE].isin(core_pool)]
         log.info(f"💎 已开启【核心优质股池】模式，限定扫描 {len(core_pool)} 只国家队核心及高弹性成分股。")
 
+    # 强制将这些核心筛选列转换为数值型，防止由于数据源格式微调（如 string）导致 .between() 失败
+    for col in [C.S_PE, C.S_PB, C.S_MCAP, C.S_TURN, C.S_PRICE, C.S_PCT]:
+        if col in df_clean.columns:
+            df_clean[col] = pd.to_numeric(df_clean[col], errors='coerce')
+            
+    if C.S_VR in df_clean.columns:
+        df_clean[C.S_VR] = pd.to_numeric(df_clean[C.S_VR], errors='coerce')
+
     is_t1_fallback = 'DATA_MODE' in df_raw.columns and (df_raw['DATA_MODE'] == 'T+1_FALLBACK').any()
     is_fallback = ((df_clean[C.S_PE] == -1.0).sum() > len(df_clean) * 0.9) or is_t1_fallback
     is_etf = df_clean[C.S_CODE].astype(str).str.startswith(('51', '15', '588', '56'))
-    pe_cond = (df_clean[C.S_PE] > c_conf.MIN_PE) | is_fallback | is_etf
     
-    stock_mask = (df_clean[C.S_MCAP].between(c_conf.MIN_CAP, c_conf.MAX_CAP)) & \
-                 (df_clean[C.S_TURN].between(c_conf.MIN_TURNOVER, c_conf.MAX_TURNOVER)) & \
-                 pe_cond & (df_clean[C.S_PE] <= c_conf.MAX_PE) & \
-                 (df_clean[C.S_PB] > 0) & (df_clean[C.S_PB] <= 30.0) & \
+    # 大幅度放宽基本面初筛，避免将优质技术面信号盲目过滤。基本面优劣将交给后续因子打分阶段细粒度评估。
+    pe_cond = (df_clean[C.S_PE] > c_conf.MIN_PE) | (df_clean[C.S_PE].isna()) | (df_clean[C.S_PE] <= 0) | is_fallback | is_etf
+    pb_cond = (df_clean[C.S_PB].between(-5.0, 50.0)) | (df_clean[C.S_PB].isna()) | is_etf
+    
+    stock_mask = (df_clean[C.S_MCAP].between(c_conf.MIN_CAP, c_conf.MAX_CAP) | df_clean[C.S_MCAP].isna()) & \
+                 (df_clean[C.S_TURN].between(c_conf.MIN_TURNOVER, c_conf.MAX_TURNOVER) | df_clean[C.S_TURN].isna()) & \
+                 pe_cond & pb_cond & \
                  (~df_clean[C.S_CODE].astype(str).str.startswith(('688', '8', '4', '9')))
     
     mask = (df_clean[C.S_PCT] >= c_conf.MIN_PCT_CHG) & \
@@ -1826,8 +1836,9 @@ def get_signals() -> tuple[list[Signal], list, set, int, str, int]:
            (df_clean[C.S_HIGH] > df_clean[C.S_LOW]) & \
            (stock_mask | is_etf)
     
+    # 量比过滤放宽：当处于盘后、或量比数据缺失/为0时予以放行，防止盘后量比数据空洞导致个股“全军覆没”
     if C.S_VR in df_clean.columns and not is_fallback:
-        mask &= (df_clean[C.S_VR].between(c_conf.MIN_VOL_RATIO, c_conf.MAX_VOL_RATIO) | is_etf)
+        mask &= (df_clean[C.S_VR].between(c_conf.MIN_VOL_RATIO, c_conf.MAX_VOL_RATIO) | df_clean[C.S_VR].isna() | (df_clean[C.S_VR] <= 0) | is_etf)
 
     recent_pushed_codes = {str(c) for c in df_clean[C.S_CODE] if is_recently_pushed(str(c), pushed)}
     pool = df_clean[mask].pipe(lambda d: d[~d[C.S_CODE].isin(recent_pushed_codes)]).copy()
