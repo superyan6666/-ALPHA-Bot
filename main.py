@@ -1807,8 +1807,12 @@ def get_signals() -> tuple[list[Signal], list, set, int, str, int]:
 
     core_pool = fetch_core_pool()
     if core_pool:
-        # 强制两端对齐为 6 位数字符串，防止 int 与 str 比较导致 isin() 结果为 0
+        log.info(f"DEBUG: df_clean size before isin check: {len(df_clean)}")
+        if len(df_clean) > 0:
+            log.info(f"DEBUG: df_clean['代码'] sample: {df_clean[C.S_CODE].head(10).tolist()}")
+            log.info(f"DEBUG: df_clean['代码'] types: {df_clean[C.S_CODE].head(10).map(type).tolist()}")
         str_core_pool = {str(c).zfill(6) for c in core_pool}
+        log.info(f"DEBUG: str_core_pool sample: {list(str_core_pool)[:10]}")
         df_clean[C.S_CODE] = df_clean[C.S_CODE].astype(str).str.zfill(6)
         df_clean = df_clean[df_clean[C.S_CODE].isin(str_core_pool)]
         log.info(f"💎 已开启【核心优质股池】模式，限定扫描 {len(core_pool)} 只成分股，匹配后过滤出 {len(df_clean)} 只。")
