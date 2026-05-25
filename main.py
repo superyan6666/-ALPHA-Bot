@@ -446,8 +446,8 @@ class Config:
     MAX_VOL_RATIO: float = field(default_factory=lambda: EnvParser.get_float('MAX_VOL_RATIO', 15.0))
     
     REQUIRED_COLS: tuple = (C.S_PRICE, C.S_OPEN, C.S_HIGH, C.S_LOW, C.S_VOL, C.S_AMT, 
-                            C.S_PCT, C.S_TURN, C.S_CODE, C.S_NAME, C.S_MCAP, C.S_PE, C.S_PB)
-    OPTIONAL_COLS: tuple = (C.S_VR,)
+                            C.S_PCT, C.S_CODE, C.S_NAME)
+    OPTIONAL_COLS: tuple = (C.S_VR, C.S_TURN, C.S_MCAP, C.S_PE, C.S_PB)
     HIST_COLS: tuple     = (C.H_DATE, C.H_OPEN, C.H_CLOSE, C.H_HIGH, C.H_LOW, C.H_VOL)
 
 @dataclass
@@ -1807,8 +1807,11 @@ def get_signals() -> tuple[list[Signal], list, set, int, str, int]:
 
     core_pool = fetch_core_pool()
     if core_pool:
-        df_clean = df_clean[df_clean[C.S_CODE].isin(core_pool)]
-        log.info(f"💎 已开启【核心优质股池】模式，限定扫描 {len(core_pool)} 只国家队核心及高弹性成分股。")
+        # 强制两端对齐为 6 位数字符串，防止 int 与 str 比较导致 isin() 结果为 0
+        str_core_pool = {str(c).zfill(6) for c in core_pool}
+        df_clean[C.S_CODE] = df_clean[C.S_CODE].astype(str).str.zfill(6)
+        df_clean = df_clean[df_clean[C.S_CODE].isin(str_core_pool)]
+        log.info(f"💎 已开启【核心优质股池】模式，限定扫描 {len(core_pool)} 只成分股，匹配后过滤出 {len(df_clean)} 只。")
 
     # 强制将这些核心筛选列转换为数值型，防止由于数据源格式微调（如 string）导致 .between() 失败
     for col in [C.S_PE, C.S_PB, C.S_MCAP, C.S_TURN, C.S_PRICE, C.S_PCT]:
