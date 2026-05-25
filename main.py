@@ -1805,15 +1805,12 @@ def get_signals() -> tuple[list[Signal], list, set, int, str, int]:
     if df_clean.empty:
         return [], [], pushed, 0, m_msg, 0
 
+    # 统一标准化股票代码为 6 位数字符串，剥离可能存在的市场前缀(如 sh/sz/bj)与后缀(如 .SH/.SZ)
+    df_clean[C.S_CODE] = df_clean[C.S_CODE].astype(str).str.extract(r'(\d{6})')[0].fillna('').str.zfill(6)
+
     core_pool = fetch_core_pool()
     if core_pool:
-        log.info(f"DEBUG: df_clean size before isin check: {len(df_clean)}")
-        if len(df_clean) > 0:
-            log.info(f"DEBUG: df_clean['代码'] sample: {df_clean[C.S_CODE].head(10).tolist()}")
-            log.info(f"DEBUG: df_clean['代码'] types: {df_clean[C.S_CODE].head(10).map(type).tolist()}")
         str_core_pool = {str(c).zfill(6) for c in core_pool}
-        log.info(f"DEBUG: str_core_pool sample: {list(str_core_pool)[:10]}")
-        df_clean[C.S_CODE] = df_clean[C.S_CODE].astype(str).str.zfill(6)
         df_clean = df_clean[df_clean[C.S_CODE].isin(str_core_pool)]
         log.info(f"💎 已开启【核心优质股池】模式，限定扫描 {len(core_pool)} 只成分股，匹配后过滤出 {len(df_clean)} 只。")
 
