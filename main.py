@@ -1111,7 +1111,7 @@ class LocalDataLake:
         return df
         
     def fetch_core_pool(self):
-        cached = self._get_cache("core_pool", 86400)
+        cached = self._get_cache("core_pool", 0)
         if cached is not None: 
             if isinstance(cached, set): return cached
         pool = self.proxy.get_core_pool()
