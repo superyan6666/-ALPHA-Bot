@@ -67,6 +67,8 @@ jobs:
           DINGTALK_WEBHOOK: ${{ secrets.DINGTALK_WEBHOOK }}
           FEISHU_WEBHOOK: ${{ secrets.FEISHU_WEBHOOK }}
           TUSHARE_TOKEN: ${{ secrets.TUSHARE_TOKEN }}
+          ORACLE_MODE: ${{ secrets.ORACLE_MODE || 'false' }}
+          HTTP_PROXY: ${{ secrets.HTTP_PROXY || '' }}
           PUSH_EMPTY_RESULT: ${{ inputs.push_empty == false && 'false' || 'true' }} 
           RUN_MODE: ${{ inputs.run_mode || 'normal' }}
           PYTHONIOENCODING: "utf-8"

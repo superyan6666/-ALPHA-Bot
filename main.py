@@ -352,12 +352,15 @@ def load_and_update_paper_trades(df_spot: pd.DataFrame) -> tuple[list, dict]:
             low = float(row.get(Cols.S_LOW, 0))
             close = float(row.get(Cols.S_PRICE, 0))
 
-            if high >= t['target']:
+            # 对齐回测架构 Phase 1: T+5 时间锁 (按自然日约 7 天估算)
+            is_locked = days_since_buy < 7
+            
+            if low <= t['stop']:
+                t['status'] = 'LOSS' # 硬止损拥有系统最高优先级，无视时间锁
+            elif not is_locked and high >= t['target']:
                 t['status'] = 'WIN'
-            elif low <= t['stop']:
-                t['status'] = 'LOSS'
-            elif days_since_buy > 10:  
-                # 震荡市超过10天未达标，判为 TIME_EXIT，不计入胜率统计，防止虚高
+            elif not is_locked and days_since_buy > 14:  
+                # 震荡市超过14个自然日(约10个交易日)未达标，判为 TIME_EXIT 丢弃，不计入胜率统计
                 t['status'] = 'TIME_EXIT'
 
         if t['status'] in ('WIN', 'LOSS'):
@@ -1740,9 +1743,10 @@ def send_dingtalk(signals: list[Signal], watchlist: list, total_pool: int, total
                     f"{s.money_risk_msg}\n\n"
                     f"{s.tranche_plan_msg}\n\n"
                     f"{s.plan_b_msg}\n\n"
-                    f"> **纪律红线**\n"
-                    f"> 🎯 **止盈**：收盘跌破 `¥{s.ma10}` (10日线)，立刻卖出一半保住利润！\n"
-                    f"> 🚫 **防守**：明日开盘直接高开 **> 4%** 说明资金抢跑，直接放弃，绝不追高！\n\n"
+                    f"> **纪律红线 (V11.0 吊灯止损架构)**\n"
+                    f"> 🛡️ **防震仓锁 (T+5)**：建仓后 5 个交易日内，只要未跌破死线 `¥{s.stop_loss}`，无论怎么洗盘坚决死拿！\n"
+                    f"> 🎯 **动态止盈 (吊灯)**：创出新高后，以最高价回撤 2.5~3 倍 ATR 为动态离场线，彻底废除均线退出法。\n"
+                    f"> 🚫 **防空防守**：明日开盘直接高开 **> 4%** 说明资金抢跑，直接放弃，绝不追高！\n\n"
                     f"[🔗 点击跳转东方财富 App 查阅详情](https://quote.eastmoney.com/unify/r/{prefix}.{s.code})\n\n"
                     f"*📌 通达信看盘助手：复制代码 `{s.code}` 后打开通达信 App 即可弹出*"
                 )
