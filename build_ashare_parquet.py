@@ -4,14 +4,15 @@ import logging
 from datetime import datetime, timedelta
 import pandas as pd
 import baostock as bs
+import akshare as ak
 import argparse
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
 def get_all_a_share_codes():
-    """获取所有A股代码（当前活跃股票）"""
+    """获取所有A股代码（当前活跃 + 已退市股票）"""
     codes = set()
-    logging.info("Querying current A-share stock pool...")
+    logging.info("Querying current A-share stock pool from baostock...")
     rs = bs.query_all_stock()
     if rs is not None and rs.error_code == '0':
         while rs.next():
@@ -19,6 +20,26 @@ def get_all_a_share_codes():
             code = row[0]
             if code.startswith('sh.6') or code.startswith('sz.0') or code.startswith('sz.3'):
                 codes.add(code)
+                
+    logging.info("Injecting delisted stocks to eliminate survivorship bias...")
+    try:
+        df_sh_delist = ak.stock_info_sh_delist()
+        if '公司代码' in df_sh_delist.columns:
+            for c in df_sh_delist['公司代码'].astype(str):
+                c = c.zfill(6)
+                if c.startswith('6'): codes.add(f'sh.{c}')
+    except Exception as e:
+        logging.warning(f"Failed to fetch SH delisted stocks: {e}")
+        
+    try:
+        df_sz_delist = ak.stock_info_sz_delist()
+        if '证券代码' in df_sz_delist.columns:
+            for c in df_sz_delist['证券代码'].astype(str):
+                c = c.zfill(6)
+                if c.startswith('0') or c.startswith('3'): codes.add(f'sz.{c}')
+    except Exception as e:
+        logging.warning(f"Failed to fetch SZ delisted stocks: {e}")
+        
     return list(codes)
 
 def build_data_lake(output_dir=".quantbot_data", max_stocks=None):
