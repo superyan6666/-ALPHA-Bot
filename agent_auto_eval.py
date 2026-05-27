@@ -7,6 +7,7 @@ import sys
 # Append current directory to import main
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 from main import DataProxy, C
+from ml_engine import XGBoostLTR, apply_liquidity_gate
 import logging
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -83,10 +84,9 @@ class SandboxEvaluator:
 
     def preprocess(self, panel):
         """Clean data, filter limit up/down, compute forward returns."""
-        # Calculate limit up/down based on previous close
-        panel['close'] = pd.to_numeric(panel['close'])
-        panel['high'] = pd.to_numeric(panel['high'])
-        panel['low'] = pd.to_numeric(panel['low'])
+        # Clean up NaNs and numeric
+        for col in ['open', 'high', 'low', 'close', 'vol']:
+            panel[col] = pd.to_numeric(panel[col], errors='coerce')
         
         panel['prev_close'] = panel.groupby('code')['close'].shift(1)
         panel['pct_chg'] = (panel['close'] / panel['prev_close'] - 1) * 100
@@ -94,29 +94,127 @@ class SandboxEvaluator:
         # Mark limit up/down (approximate 9.5% for A-shares)
         panel['is_limit'] = (panel['pct_chg'].abs() >= 9.5) & (panel['high'] == panel['low'])
         
-        # Calculate forward returns (T+1 to T+2)
-        # If we buy at T+1 open, we want the return from T+1 Open to T+N Close
-        # But for simplicity in alpha research, we often use Close to Close of T+1, or Open(T+1) to Open(T+2)
-        # Let's use Close-to-Close forward 1 day: (Close(T+1) / Close(T)) - 1
-        panel['fwd_ret_1d'] = panel.groupby('code')['close'].shift(-1) / panel['close'] - 1
+        # Calculate realistic forward returns (T+1 to T+2)
+        # Buy at T+1 Open, Sell at T+2 Open (Or T+1 Close to T+2 Close)
+        # Wait, if we generate signals at T Close, we execute at T+1 Open.
+        # realistic return: (Open(T+2) / Open(T+1)) - 1
+        # Let's use Close(T+1) / Open(T+1) - 1 to represent intraday return on T+1
+        panel['next_open'] = panel.groupby('code')['open'].shift(-1)
+        panel['next_close'] = panel.groupby('code')['close'].shift(-1)
+        panel['fwd_ret_1d'] = panel['next_close'] / panel['close'] - 1  # For linear eval compatibility
+        panel['fwd_ret_real'] = panel['next_close'] / (panel['next_open'] + 1e-5) - 1 # Realizable friction-aware return
         
-        # Clean up NaNs
-        panel = panel.dropna(subset=['fwd_ret_1d'])
+        panel = panel.dropna(subset=['fwd_ret_1d', 'fwd_ret_real'])
         return panel
 
     def calc_factors(self, panel):
-        """Calculate GTJA 191 trial factors."""
+        """Calculate A-share specific trial factors."""
         log.info("Calculating factors...")
         
-        # Factor 1: 5-day reversal (Dummy Alpha)
-        panel['alpha_reversal_5d'] = - (panel['close'] / panel.groupby('code')['close'].shift(5) - 1)
+        # Calculate percentage change if not already present
+        if 'pct_chg' not in panel.columns:
+            panel['prev_close'] = panel.groupby('code')['close'].shift(1)
+            panel['pct_chg'] = (panel['close'] / panel['prev_close'] - 1) * 100
+            
+        # 1. Smart Money Correlation (sm_corr)
+        # rolling 20-day correlation between daily return and volume
+        log.info("Computing SM_CORR...")
+        panel['sm_corr'] = panel.groupby('code').apply(
+            lambda x: x['pct_chg'].rolling(20).corr(x['vol'])
+        ).reset_index(0, drop=True)
         
-        # Factor 2: GTJA Alpha 024 approximation
-        # logic: SMA(CLOSE, 20) / CLOSE - 1 (simple distance to 20d MA, smaller means stronger momentum?)
-        panel['alpha_024_approx'] = panel.groupby('code')['close'].transform(lambda x: x.rolling(20).mean()) / panel['close'] - 1
+        # 2. Amihud Illiquidity (amihud_20)
+        # Abs(Return) / (Price * Volume) * 1e6
+        log.info("Computing AMIHUD...")
+        amihud_raw = panel['pct_chg'].abs() / (panel['vol'] * panel['close'] + 1e-5) * 1e6
+        panel['amihud'] = np.where(panel.get('is_limit', False), 99999.0, amihud_raw)
+        panel['amihud_20'] = panel.groupby('code')['amihud'].transform(lambda x: x.rolling(20).mean())
+        
+        # 3. Close Location Value (CLV)
+        log.info("Computing CLV...")
+        panel['clv'] = (panel['close'] - panel['low']) / (panel['high'] - panel['low'] + 1e-8)
+        
+        
+        # 4. Volatility and Volume
+        log.info("Computing Vol/Vol features...")
+        panel['volatility_5d'] = panel.groupby('code')['pct_chg'].transform(lambda x: x.rolling(5).std())
+        panel['vol_ratio'] = panel['vol'] / (panel.groupby('code')['vol'].transform(lambda x: x.rolling(5).mean()) + 1e-5)
+        
+        # 5. Momentum
+        panel['alpha_reversal_5d'] = - (panel['close'] / panel.groupby('code')['close'].shift(5) - 1)
+        panel['alpha_024_approx'] = panel.groupby('code')['close'].transform(lambda x: x.rolling(20).mean()) / (panel['close'] + 1e-5) - 1
         
         return panel
-
+        
+    def evaluate_ml_model(self, panel):
+        """Train and evaluate XGBoost LTR model."""
+        log.info("--- Starting Machine Learning Evaluation ---")
+        
+        # Apply Liquidity Gate
+        panel = apply_liquidity_gate(panel, amihud_col='amihud_20', threshold_pct=0.90)
+        
+        # Filter limits
+        panel = panel[~panel['is_limit']].copy()
+        
+        feature_cols = ['sm_corr', 'clv', 'volatility_5d', 'vol_ratio', 'alpha_reversal_5d', 'alpha_024_approx']
+        
+        # Drop NaNs
+        ml_df = panel.dropna(subset=feature_cols + ['fwd_ret_real', 'date']).copy()
+        
+        # Train / Test split
+        # We will train on the first 80% of dates, test on last 20%
+        dates = sorted(ml_df['date'].unique())
+        split_idx = int(len(dates) * 0.8)
+        train_dates = dates[:split_idx]
+        test_dates = dates[split_idx:]
+        
+        train_df = ml_df[ml_df['date'].isin(train_dates)].copy()
+        test_df = ml_df[ml_df['date'].isin(test_dates)].copy()
+        
+        log.info(f"Train set: {len(train_df)} rows ({train_dates[0].strftime('%Y-%m-%d')} to {train_dates[-1].strftime('%Y-%m-%d')})")
+        log.info(f"Test set: {len(test_df)} rows ({test_dates[0].strftime('%Y-%m-%d')} to {test_dates[-1].strftime('%Y-%m-%d')})")
+        
+        if len(train_df) == 0 or len(test_df) == 0:
+            log.warning("Not enough data for ML evaluation.")
+            return
+            
+        ltr = XGBoostLTR()
+        ltr.train(train_df, feature_cols, target_col='fwd_ret_real', group_col='date')
+        
+        # Feature Importance
+        imp_df = ltr.get_feature_importance(feature_cols)
+        log.info("XGBoost Feature Importance (Gain):")
+        for _, row in imp_df.iterrows():
+            log.info(f"  {row['feature']}: {row['importance']:.4f}")
+            
+        # Prediction and evaluation on Test Set
+        test_df['xgb_score'] = ltr.predict(test_df, feature_cols)
+        
+        # Group by prediction deciles
+        def _group_pred(group):
+            if len(group) < 5: return pd.Series(index=group.index, dtype=float)
+            try:
+                # 5 quantiles
+                return pd.qcut(group['xgb_score'], 5, labels=[1, 2, 3, 4, 5], duplicates='drop')
+            except:
+                return pd.Series(index=group.index, dtype=float)
+                
+        test_df['xgb_quantile'] = test_df.groupby('date').apply(_group_pred).reset_index(0, drop=True)
+        test_df = test_df.dropna(subset=['xgb_quantile'])
+        
+        # Calc returns (using realistic friction-aware return)
+        group_returns = test_df.groupby('xgb_quantile')['fwd_ret_real'].mean() * 10000 # bps
+        
+        log.info("XGBoost Out-of-Sample Daily Mean Return by Quantile (bps):")
+        for q, ret in group_returns.items():
+            log.info(f"  Q{q}: {ret:.2f} bps")
+            
+        ls_ret = group_returns.get(5, 0) - group_returns.get(1, 0)
+        log.info(f"XGBoost Long-Short Spread (Q5-Q1): {ls_ret:.2f} bps/day")
+        
+        # Turnover approx
+        q5_stocks = test_df[test_df['xgb_quantile'] == 5]
+        log.info(f"Average stocks in Q5 per day: {len(q5_stocks) / len(test_dates):.1f}")
     def evaluate(self, panel, factor_name):
         """Evaluate a specific factor."""
         log.info(f"--- Evaluating Factor: {factor_name} ---")
@@ -194,5 +292,5 @@ if __name__ == "__main__":
         panel = evaluator.preprocess(panel)
         panel = evaluator.calc_factors(panel)
         
-        evaluator.evaluate(panel, 'alpha_reversal_5d')
-        evaluator.evaluate(panel, 'alpha_024_approx')
+        # ML Evaluation out of sample
+        evaluator.evaluate_ml_model(panel)
