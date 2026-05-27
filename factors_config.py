@@ -61,6 +61,7 @@ def get_factors_config(f_val: float, f_mom: float, f_rev: float, f_risk: float,
         Factor(lambda d: 30 <= d.get('rsi', 50) <= 72, 5, 1.0, "- 📊 **温度适中**：RSI处于健康买入区间，正是下手时机", FactorGroup.TREND),
         
         Factor(lambda d: d.get('bull_rank', False), 8, f_mom, "- 📈 **顺势而为**：均线多头排列，跟着主力资金大部队走", FactorGroup.TREND),
+        Factor(lambda d: d.get('sm_corr', 0) <= -0.5, 8, 1.0, "- 🧠 **聪明钱吸筹**：量价呈现高度负相关，主力在下跌时悄然建仓", FactorGroup.MOM),
         
         Factor(lambda d: d.get('has_zt', False), 8, 1.0, "- 🔥 **股性活跃**：该股历史上容易涨停，不会一潭死水", FactorGroup.VOL),
         Factor(lambda d: d.get('vol_ratio', 0) >= 1.8, 8, 1.0, "- 🔵 **放量确认**：今天成交量明显放大，大资金开始干活了", FactorGroup.VOL),
@@ -86,6 +87,8 @@ def get_factors_config(f_val: float, f_mom: float, f_rev: float, f_risk: float,
         Factor(lambda d: d.get('is_first_dip', False) and m_regime != 'BEAR', 20, f_mom, "- 🐉 **龙头首阴**：连板龙头首次缩量温和回调，量价健康且未破5日线，游资经典接力点！", FactorGroup.SPECIAL),
         Factor(lambda d: d.get('upper_shadow_pct', 0) > 35, -15, f_risk, "- ⚠️ **诱多预警**：冲高后大幅跳水，上方抛压极重别上当！"),
         Factor(lambda d: d.get('dist_ma20', 0) > 25, -15, f_risk, "- 🚫 **追高预警**：目前涨得太急离均线太远，随时面临暴跌回调"),
-        
+        Factor(lambda d: d.get('sm_corr', 0) >= 0.5, -10, f_risk, "- ⚠️ **量价正向失真**：量价高度正相关且无实质突破，散户情绪狂热 (聪明钱反向扣分)"),
+        Factor(lambda d: d.get('amihud_20', 0) > 5000, -15, f_risk, "- 🩸 **流动性枯竭**：单位成交额撬动极大涨幅，典型的强庄控盘或杀猪盘，一碰就炸！"),
+        Factor(lambda d: d.get('wq_41_divergence', False), -15, f_risk, "- ☠️ **高位无量空涨**：股价创出近期新高但量能极度萎缩，资金接力枯竭，随时雪崩崩盘！"),
         Factor(lambda d: in_danger and d.get('mcap', 100e8) < 100e8, -8, f_risk, f"- 📅 **财报防雷**：当前属于{danger_label}，小盘股需防业绩变脸 (扣分)")
     ]

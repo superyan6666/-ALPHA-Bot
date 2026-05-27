@@ -1215,6 +1215,17 @@ class AShareTechnicals:
         self.df['PCT_CHG'] = close.pct_change() * 100
         self.df['OBV'] = np.where(close > self.df['REF_C'], vol, np.where(close < self.df['REF_C'], -vol, 0)).cumsum()
         
+        # [Smart Money Correlation] 
+        self.df['SM_CORR'] = self.df['PCT_CHG'].rolling(20).corr(vol)
+        
+        # [Amihud Illiquidity]
+        amplitude = (high - low) / self.df['REF_C'].replace(0, np.nan) * 100
+        is_limit = (amplitude == 0) & (self.df['PCT_CHG'].abs() > 4.5)
+        amihud_raw = self.df['PCT_CHG'].abs() / (vol * close + 1e-5) * 1e6
+        self.df['AMIHUD'] = np.where(is_limit, 99999.0, amihud_raw)
+        self.df['AMIHUD_20'] = self.df['AMIHUD'].rolling(20).mean()
+        self.df['IS_LIMIT'] = is_limit
+        
         self.today = self.df.iloc[-1]
         self.yest = self.df.iloc[-2]
         self.two_days_ago = self.df.iloc[-3] if len(self.df) >= 3 else None
@@ -1323,6 +1334,11 @@ class AShareTechnicals:
             'low_val': float(today[C.H_LOW]), 'recent_20_low': float(df[C.H_LOW].iloc[-20:].min()),
             'boll_lower': float(today['MA20'] - 2 * df[C.H_CLOSE].iloc[-20:].dropna().std()) if len(df[C.H_CLOSE].iloc[-20:].dropna()) >= 2 else np.nan,
             'close_60d_ago': float(df[C.H_CLOSE].iloc[-60]) if len(df) >= 60 else 0.0,
+            'sm_corr': float(today.get('SM_CORR', 0.0)) if len(df) >= 60 and not bool(today.get('IS_LIMIT', False)) and not pd.isna(today.get('SM_CORR')) else 0.0,
+            'amihud_20': float(today.get('AMIHUD_20', 0.0)) if not pd.isna(today.get('AMIHUD_20')) else 0.0,
+            'wq_41_divergence': bool((today[C.H_CLOSE] >= today[C.H_OPEN]) and 
+                                     (len(df) >= 60 and (today[C.H_CLOSE] - df[C.H_CLOSE].iloc[-60:].min()) / (df[C.H_CLOSE].iloc[-60:].max() - df[C.H_CLOSE].iloc[-60:].min() + 1e-5) > 0.90) and 
+                                     (today[C.H_VOL] < today['MA20_V'] * 0.5)),
         }
 
 
