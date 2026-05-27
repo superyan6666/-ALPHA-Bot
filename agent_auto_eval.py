@@ -108,9 +108,17 @@ class SandboxEvaluator:
         ic_std = ic_series.std()
         icir = mean_ic / ic_std * np.sqrt(252) if ic_std != 0 else 0
         
+        # Calculate Rolling 252-day IC (1 year) to observe decay
+        rolling_mean_ic = ic_series.rolling(252, min_periods=60).mean()
+        rolling_ic_std = ic_series.rolling(252, min_periods=60).std()
+        rolling_icir = (rolling_mean_ic / rolling_ic_std) * np.sqrt(252)
+        
         log.info(f"Rank IC Mean: {mean_ic:.4f}")
         log.info(f"Rank IC Std:  {ic_std:.4f}")
         log.info(f"Annual ICIR:  {icir:.4f}")
+        if not rolling_icir.dropna().empty:
+            log.info(f"Rolling 1Y ICIR (Latest): {rolling_icir.dropna().iloc[-1]:.4f}")
+            log.info(f"Rolling 1Y IC Mean (Latest): {rolling_mean_ic.dropna().iloc[-1]:.4f}")
         
         # 2. Quantile Grouping
         # To avoid Lookahead bias, group by cross-sectional factor values each day
@@ -136,7 +144,13 @@ class SandboxEvaluator:
         log.info(f"Long-Short Spread (Q5-Q1): {ls_ret:.2f} bps/day")
 
 if __name__ == "__main__":
-    evaluator = SandboxEvaluator(start_date="20230101")
+    evaluator = SandboxEvaluator(start_date="20220101")  # Increased window to allow 252d rolling
+    
+    # ⚠️ [WARNING] 幸存者偏差提示 (Survivorship Bias Warning)
+    # 当前沙盒使用静态的股票池进行快速验证。在严格的学术与实盘定型中，
+    # 必须在每一期调仓日获取当时的成分股快照（包含后来退市的股票），
+    # 否则在下行周期（如2022-2024）中，基于当下存活股票的历史测算会导致收益率虚高。
+    # 后续演进路线将引入 Tushare/Baostock 的历史成分股动态切片功能。
     
     # Use a static subset of CSI 300 for quick testing
     test_pool = ["600519", "601318", "600036", "000858", "002594", 
