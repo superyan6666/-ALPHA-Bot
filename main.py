@@ -119,7 +119,7 @@ def _patched_request(self, method, url, **kwargs):
     hostname = parsed.hostname or ""
     
     # 仅针对常见行情域名的白名单进行 UA 伪装，避免污染钉钉等原生请求
-    whitelist_domains = ('eastmoney.com', 'dfcfw.com', 'sina.com.cn', 'sinajs.cn', 'money.163.com', '10jqka.com.cn', 'tushare.pro', 'csindex.com.cn', 'szse.cn')
+    whitelist_domains = ('eastmoney.com', 'dfcfw.com', 'sinajs.cn', 'money.163.com', '126.net', 'gtimg.cn', '10jqka.com.cn', 'tushare.pro', 'csindex.com.cn', 'szse.cn')
     needs_patch = any(hostname == d or hostname.endswith('.' + d) for d in whitelist_domains)
     
     if needs_patch:
@@ -133,6 +133,10 @@ def _patched_request(self, method, url, **kwargs):
             headers['Referer'] = 'https://quote.eastmoney.com/'
         elif 'sina.com.cn' in hostname or 'sinajs.cn' in hostname:
             headers['Referer'] = 'https://finance.sina.com.cn/'
+        elif '126.net' in hostname:
+            headers['Referer'] = 'http://quotes.money.163.com/'
+        elif 'gtimg.cn' in hostname:
+            headers['Referer'] = 'https://finance.qq.com/'
         elif 'tushare.pro' in hostname:
             headers['Referer'] = 'https://www.tushare.pro/'
         elif 'csindex.com.cn' in hostname:
@@ -809,29 +813,128 @@ class DataProxy:
             if df is not None and not df.empty:
                 return df
         except Exception as e:
-            log.warning(f"行情主接口异常: {e}，正在启动新浪备用源执行优雅降级...")
-            df = ak.stock_zh_a_spot()
-            if df is not None and not df.empty:
-                rename_map = {'代码': C.S_CODE, '名称': C.S_NAME, '最新价': C.S_PRICE,
-                              '涨跌幅': C.S_PCT, '今开': C.S_OPEN, '最高': C.S_HIGH,
-                              '最低': C.S_LOW, '成交量': C.S_VOL, '成交额': C.S_AMT}
-                df = df.rename(columns=rename_map)
+            log.warning(f"行情主接口(EastMoney)异常: {e}，将触发级联降级...")
+        return None
+
+    def _fetch_spot_tencent(self) -> pd.DataFrame:
+        log.info("🚀 启动备用源: 腾讯原生 API (gtimg)...")
+        pool = self.get_core_pool()
+        if not pool: return None
+        
+        # 将 pool 切分为每批 50 个以防止 URL 过长
+        batch_size = 50
+        results = []
+        for i in range(0, len(pool), batch_size):
+            batch_codes = pool[i:i+batch_size]
+            formatted_codes = []
+            for c in batch_codes:
+                if c.startswith('6'): formatted_codes.append(f'sh{c}')
+                elif c.startswith('0') or c.startswith('3'): formatted_codes.append(f'sz{c}')
+                elif c.startswith('8') or c.startswith('4'): formatted_codes.append(f'bj{c}')
+                else: formatted_codes.append(f'sh{c}')
                 
-                funds_df = self._get_tushare_fundamentals_df()
-                if not funds_df.empty:
-                    df = pd.merge(df, funds_df, on=C.S_CODE, how='left')
-                    df[C.S_TURN] = df[C.S_TURN].fillna(2.0)
-                    df[C.S_MCAP] = df[C.S_MCAP].fillna(100e8)
-                    df[C.S_PE] = df[C.S_PE].fillna(-1.0)
-                    df[C.S_PB] = df[C.S_PB].fillna(2.0)
-                    df[C.S_VR] = df[C.S_VR].fillna(1.0)
-                    log.info("💎 已通过 Tushare 成功向量化修复 Sina 备用源缺失的 PE/VR 等基本面数据。")
-                else:
-                    fallback_defaults = {C.S_TURN: 2.0, C.S_MCAP: 100e8, C.S_PE: -1.0, C.S_PB: 2.0, C.S_VR: 1.0}
-                    for col, val in fallback_defaults.items():
-                        if col not in df.columns: df[col] = val
-                return df
-            raise ValueError('spot_empty')
+            url = f"http://qt.gtimg.cn/q={','.join(formatted_codes)}"
+            try:
+                resp = requests.get(url, timeout=5)
+                resp.encoding = 'gbk'
+                lines = resp.text.strip().split('\n')
+                for line in lines:
+                    if '=' not in line: continue
+                    var, data = line.split('=', 1)
+                    parts = data.replace('"', '').replace(';', '').split('~')
+                    if len(parts) < 45: continue
+                    
+                    parsed = {
+                        C.S_NAME: parts[1],
+                        C.S_CODE: parts[2],
+                        C.S_PRICE: float(parts[3]) if parts[3] else None,
+                        C.S_OPEN: float(parts[5]) if parts[5] else None,
+                        C.S_HIGH: float(parts[33]) if parts[33] else None,
+                        C.S_LOW: float(parts[34]) if parts[34] else None,
+                        C.S_PCT: float(parts[32]) if parts[32] else None,
+                        C.S_VOL: float(parts[36]) if parts[36] else None,
+                        C.S_AMT: float(parts[37]) * 10000 if parts[37] else None,
+                        C.S_TURN: float(parts[38]) if parts[38] else 2.0,
+                        C.S_PE: float(parts[39]) if parts[39] else -1.0,
+                        C.S_PB: float(parts[46]) if len(parts)>46 and parts[46] else 2.0,
+                        C.S_VR: float(parts[49]) if len(parts)>49 and parts[49] else 1.0,
+                        'source_timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+                    }
+                    results.append(parsed)
+            except Exception as e:
+                log.warning(f"腾讯源批量获取异常: {e}")
+                
+        df = pd.DataFrame(results)
+        if df.empty: return None
+        
+        # 腾讯缺少市值信息，用 tushare fundamentals 补全
+        funds_df = self._get_tushare_fundamentals_df()
+        if not funds_df.empty:
+            df = pd.merge(df, funds_df, on=C.S_CODE, how='left')
+            df[C.S_MCAP] = df[C.S_MCAP].fillna(100e8)
+            log.info("💎 已通过 Tushare 成功向量化补全腾讯备用源缺失的市值数据。")
+        else:
+            df[C.S_MCAP] = 100e8
+        return df
+
+    def _fetch_spot_netease(self) -> pd.DataFrame:
+        log.warning("⚠️ 启动三级备用源: 网易原生 API (126.net)...")
+        pool = self.get_core_pool()
+        if not pool: return None
+        
+        batch_size = 50
+        results = []
+        for i in range(0, len(pool), batch_size):
+            batch_codes = pool[i:i+batch_size]
+            formatted_codes = []
+            for c in batch_codes:
+                if c.startswith('6'): formatted_codes.append(f'0{c}')
+                elif c.startswith('0') or c.startswith('3'): formatted_codes.append(f'1{c}')
+                elif c.startswith('8') or c.startswith('4'): formatted_codes.append(f'1{c}')
+                else: formatted_codes.append(f'0{c}')
+                
+            url = f"http://api.money.126.net/data/feed/{','.join(formatted_codes)},money.api"
+            try:
+                resp = requests.get(url, timeout=5)
+                text = resp.text
+                start = text.find('(')
+                end = text.rfind(')')
+                if start != -1 and end != -1:
+                    data = json.loads(text[start+1:end])
+                    for k, v in data.items():
+                        parsed = {
+                            C.S_NAME: v.get('name'),
+                            C.S_CODE: v.get('symbol'),
+                            C.S_PRICE: v.get('price'),
+                            C.S_OPEN: v.get('open'),
+                            C.S_HIGH: v.get('high'),
+                            C.S_LOW: v.get('low'),
+                            C.S_PCT: v.get('percent') * 100 if v.get('percent') else None,
+                            C.S_VOL: v.get('volume'),
+                            C.S_AMT: v.get('turnover'),
+                            C.S_TURN: v.get('turnoverrate', 2.0),
+                            'source_timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+                        }
+                        results.append(parsed)
+            except Exception as e:
+                log.warning(f"网易源批量获取异常: {e}")
+                
+        df = pd.DataFrame(results)
+        if df.empty: return None
+        
+        funds_df = self._get_tushare_fundamentals_df()
+        if not funds_df.empty:
+            df = pd.merge(df, funds_df, on=C.S_CODE, how='left')
+            df[C.S_MCAP] = df[C.S_MCAP].fillna(100e8)
+            df[C.S_PE] = df[C.S_PE].fillna(-1.0)
+            df[C.S_PB] = df[C.S_PB].fillna(2.0)
+            df[C.S_VR] = df[C.S_VR].fillna(1.0)
+            log.info("💎 已通过 Tushare 成功补全网易备用源缺失的基础特征。")
+        else:
+            fallback_defaults = {C.S_MCAP: 100e8, C.S_PE: -1.0, C.S_PB: 2.0, C.S_VR: 1.0}
+            for col, val in fallback_defaults.items():
+                if col not in df.columns: df[col] = val
+        return df
 
     def _fetch_spot_tushare_fallback(self) -> pd.DataFrame:
         """极寒时刻的终极兜底：当全市场实时接口死掉，用日频历史伪装截面"""
@@ -873,13 +976,28 @@ class DataProxy:
     def get_spot(self) -> pd.DataFrame:
         df = self._fetch_spot_qmt()
         if df is not None: return df
+        
         df = self._fetch_spot_efinance()
         if df is not None: return df
+        
         try:
             df = self._fetch_spot_akshare()
             if df is not None: return df
         except Exception as e:
             log.debug(f"akshare spot failed: {e}")
+            
+        try:
+            df = self._fetch_spot_tencent()
+            if df is not None: return df
+        except Exception as e:
+            log.debug(f"tencent spot failed: {e}")
+            
+        try:
+            df = self._fetch_spot_netease()
+            if df is not None: return df
+        except Exception as e:
+            log.debug(f"netease spot failed: {e}")
+            
         return self._fetch_spot_tushare_fallback()
 
     # ---- [3. Index & Context] ----
