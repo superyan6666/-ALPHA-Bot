@@ -83,6 +83,7 @@ jobs:
 
           if [ "$RUN_MODE" == "test_conn" ]; then
             echo "🔔 检测到测试模式，执行钉钉与飞书连通性测试..."
+            python test_spot_sources.py
             python main.py
           elif [ "$RUN_MODE" == "briefing" ]; then
             echo "📊 启动早盘宏观与热门主线播报 Agent..."
@@ -91,6 +92,8 @@ jobs:
             echo "📊 检测到大盘体检模式，开始扫描宏观资金与情绪指标..."
             python main.py
           else
+            echo "🚀 预检备用数据源连通性..."
+            python test_spot_sources.py || true
             echo "🚀 执行全量 A 股量化扫描..."
             python main.py
           fi

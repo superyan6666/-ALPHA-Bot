@@ -847,17 +847,17 @@ class DataProxy:
                     parsed = {
                         C.S_NAME: parts[1],
                         C.S_CODE: parts[2],
-                        C.S_PRICE: float(parts[3]) if parts[3] else None,
-                        C.S_OPEN: float(parts[5]) if parts[5] else None,
-                        C.S_HIGH: float(parts[33]) if parts[33] else None,
-                        C.S_LOW: float(parts[34]) if parts[34] else None,
-                        C.S_PCT: float(parts[32]) if parts[32] else None,
-                        C.S_VOL: float(parts[36]) if parts[36] else None,
-                        C.S_AMT: float(parts[37]) * 10000 if parts[37] else None,
-                        C.S_TURN: float(parts[38]) if parts[38] else 2.0,
-                        C.S_PE: float(parts[39]) if parts[39] else -1.0,
-                        C.S_PB: float(parts[46]) if len(parts)>46 and parts[46] else 2.0,
-                        C.S_VR: float(parts[49]) if len(parts)>49 and parts[49] else 1.0,
+                        C.S_PRICE: float(parts[3]) if parts[3] else None,       # 价格=3
+                        C.S_OPEN: float(parts[5]) if parts[5] else None,        # 开盘=5
+                        C.S_HIGH: float(parts[33]) if parts[33] else None,      # 最高=33
+                        C.S_LOW: float(parts[34]) if parts[34] else None,       # 最低=34
+                        C.S_PCT: float(parts[32]) if parts[32] else None,       # 涨跌幅=32
+                        C.S_VOL: float(parts[36]) if parts[36] else None,       # 成交量(手)=36
+                        C.S_AMT: float(parts[37]) * 10000 if parts[37] else None, # 成交额(万)=37
+                        C.S_TURN: float(parts[38]) if parts[38] else 2.0,       # 换手率=38
+                        C.S_PE: float(parts[39]) if parts[39] else -1.0,        # 市盈率=39
+                        C.S_PB: float(parts[46]) if len(parts)>46 and parts[46] else 2.0, # 市净率=46
+                        C.S_VR: float(parts[49]) if len(parts)>49 and parts[49] else 1.0, # 量比=49
                         'source_timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S')
                     }
                     results.append(parsed)
@@ -903,16 +903,16 @@ class DataProxy:
                     data = json.loads(text[start+1:end])
                     for k, v in data.items():
                         parsed = {
-                            C.S_NAME: v.get('name'),
-                            C.S_CODE: v.get('symbol'),
-                            C.S_PRICE: v.get('price'),
-                            C.S_OPEN: v.get('open'),
-                            C.S_HIGH: v.get('high'),
-                            C.S_LOW: v.get('low'),
-                            C.S_PCT: v.get('percent') * 100 if v.get('percent') else None,
-                            C.S_VOL: v.get('volume'),
-                            C.S_AMT: v.get('turnover'),
-                            C.S_TURN: v.get('turnoverrate', 2.0),
+                            C.S_NAME: v.get('name', ''),
+                            C.S_CODE: v.get('symbol', ''),
+                            C.S_PRICE: v.get('price') if v.get('price') is not None else float('nan'),
+                            C.S_OPEN: v.get('open') if v.get('open') is not None else float('nan'),
+                            C.S_HIGH: v.get('high') if v.get('high') is not None else float('nan'),
+                            C.S_LOW: v.get('low') if v.get('low') is not None else float('nan'),
+                            C.S_PCT: v.get('percent') * 100 if v.get('percent') is not None else float('nan'),
+                            C.S_VOL: v.get('volume') if v.get('volume') is not None else float('nan'),
+                            C.S_AMT: v.get('turnover') if v.get('turnover') is not None else float('nan'),
+                            C.S_TURN: v.get('turnoverrate') if v.get('turnoverrate') is not None else 2.0,
                             'source_timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S')
                         }
                         results.append(parsed)

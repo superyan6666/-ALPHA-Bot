@@ -63,8 +63,55 @@ def fetch_tencent(codes):
         logging.error(f"Tencent API error: {e}")
         return pd.DataFrame()
 
+def fetch_netease(codes):
+    formatted_codes = []
+    for c in codes:
+        if c.startswith('6'): formatted_codes.append(f'0{c}')
+        elif c.startswith('0') or c.startswith('3'): formatted_codes.append(f'1{c}')
+        elif c.startswith('8') or c.startswith('4'): formatted_codes.append(f'1{c}')
+        else: formatted_codes.append(f'0{c}')
+        
+    url = f"http://api.money.126.net/data/feed/{','.join(formatted_codes)},money.api"
+    try:
+        resp = requests.get(url, timeout=5)
+        text = resp.text
+        start = text.find('(')
+        end = text.rfind(')')
+        if start != -1 and end != -1:
+            data = json.loads(text[start+1:end])
+            results = []
+            for k, v in data.items():
+                parsed = {
+                    'name': v.get('name', ''),
+                    'code': v.get('symbol', ''),
+                    'price': v.get('price') if v.get('price') is not None else float('nan'),
+                    'open': v.get('open') if v.get('open') is not None else float('nan'),
+                    'high': v.get('high') if v.get('high') is not None else float('nan'),
+                    'low': v.get('low') if v.get('low') is not None else float('nan'),
+                    'pct_chg': v.get('percent') * 100 if v.get('percent') is not None else float('nan'),
+                    'volume': v.get('volume') if v.get('volume') is not None else float('nan'),
+                }
+                results.append(parsed)
+            return pd.DataFrame(results)
+        return pd.DataFrame()
+    except Exception as e:
+        logging.error(f"Netease API error: {e}")
+        return pd.DataFrame()
+
 if __name__ == "__main__":
+    import sys
     test_codes = ['600519', '000001', '300750']
-    df = fetch_tencent(test_codes)
-    print("Tencent Spot Data:")
-    print(df)
+    
+    df_tencent = fetch_tencent(test_codes)
+    print("\n--- Tencent Spot Data ---")
+    print(df_tencent)
+    
+    df_netease = fetch_netease(test_codes)
+    print("\n--- Netease Spot Data ---")
+    print(df_netease)
+    
+    if df_tencent.empty and df_netease.empty:
+        logging.error("Both fallback spot sources failed!")
+        sys.exit(1)
+    
+    sys.exit(0)
