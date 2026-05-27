@@ -1021,7 +1021,7 @@ class DataProxy:
             
         if bs is not None:
             self._login_baostock()
-            bs_symbol = 'sh.' + symbol if symbol.startswith('0') else 'sz.' + symbol
+            bs_symbol = 'sh.' + symbol[-6:] if 'sh' in symbol.lower() else 'sz.' + symbol[-6:]
             start_fmt = (datetime.now() - timedelta(days=365)).strftime('%Y-%m-%d')
             def _do_index_query():
                 return bs.query_history_k_data_plus(bs_symbol, "date,open,close,high,low,volume", start_date=start_fmt, frequency="d")
