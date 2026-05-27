@@ -1686,7 +1686,79 @@ def process_stock(row: pd.Series, raw_hist: pd.DataFrame, now: datetime, market_
 
     return (data, stop, risk_pct) 
 
+
+import yfinance as yf
+
+def generate_macro_section() -> str:
+    """获取外围宏观数据，生成早盘宏观快报的内容"""
+    try:
+        tickers = yf.Tickers("^TNX ^VIX ^SKEW HG=F GC=F CL=F ^GSPC")
+        hist = tickers.history(period="5d")
+        close_df = hist['Close']
+
+        def get_last_pct(ticker):
+            s = close_df[ticker].dropna()
+            if len(s) >= 2:
+                last = s.iloc[-1]
+                prev = s.iloc[-2]
+                pct = (last - prev) / prev * 100
+                return last, pct
+            return 0.0, 0.0
+
+        tnx_l, tnx_p = get_last_pct('^TNX')
+        vix_l, vix_p = get_last_pct('^VIX')
+        skew_l, skew_p = get_last_pct('^SKEW')
+        gc_l, gc_p = get_last_pct('GC=F')
+        cl_l, cl_p = get_last_pct('CL=F')
+        sp500_l, sp500_p = get_last_pct('^GSPC')
+
+        msg = (
+            f"### 🌍 隔夜外围与宏观风控快报\n"
+            f"- **标普500 (^GSPC)**: `{sp500_l:.2f}` ({sp500_p:+.2f}%)\n"
+            f"- **恐慌指数 (^VIX)**: `{vix_l:.2f}` ({vix_p:+.2f}%) " + ("⚠️ **极度恐慌**" if vix_l > 25 else "✅ 情绪稳定") + "\n"
+            f"- **黑天鹅指数 (^SKEW)**: `{skew_l:.2f}`\n"
+            f"- **美债10年期 (^TNX)**: `{tnx_l:.2f}%` ({tnx_p:+.2f}%)\n"
+            f"- **COMEX 黄金 (GC=F)**: `{gc_l:.2f}` ({gc_p:+.2f}%)\n"
+            f"- **WTI 原油 (CL=F)**: `{cl_l:.2f}` ({cl_p:+.2f}%)\n\n"
+            f"> *数据源: Yahoo Finance (yfinance)*"
+        )
+        return msg
+    except Exception as e:
+        import logging
+        logging.getLogger(__name__).warning(f"获取宏观数据失败: {e}")
+        return f"### 🌍 隔夜外围与宏观指标快报\n⚠️ 外围数据获取失败 ({e})"
+
+def get_ma_trend(cl_series: pd.Series) -> tuple[str, str]:
+    """根据收盘价序列判断长短均线趋势"""
+    if len(cl_series) < 60: return "数据不足", ""
+    ma5 = cl_series.rolling(5).mean().iloc[-1]
+    ma20 = cl_series.rolling(20).mean().iloc[-1]
+    ma60 = cl_series.rolling(60).mean().iloc[-1]
+    close = cl_series.iloc[-1]
+    
+    mas = [ma5, ma20, ma60]
+    max_ma, min_ma = max(mas), min(mas)
+    spread = (max_ma - min_ma) / min_ma
+    
+    if spread < 0.02:
+        return "均线粘连", "面临方向性变盘选择，资金观望情绪浓厚"
+    elif ma5 > ma20 > ma60:
+        if close > ma5:
+            return "三线开花(强势多头)", "全面多头排列，上行动能极强，顺势做多"
+        else:
+            return "多头排列(短期回踩)", "大趋势向上但短期回踩，关注下方均线支撑"
+    elif ma5 < ma20 < ma60:
+        if close < ma5:
+            return "空头瀑布(极度弱势)", "全面空头排列，下行趋势加速，严控仓位"
+        else:
+            return "空头排列(超跌反弹)", "大级别处于下降通道，当前属于超跌反弹"
+    elif ma60 > ma20 and ma5 > ma20:
+        return "筑底反弹", "中长线偏空但短期均线拐头向上，左侧资金试盘"
+    else:
+        return "震荡分化", "长短均线方向不一，无明显单边趋势"
+
 def extract_market_context(df_raw: pd.DataFrame, c_conf: Config) -> tuple[pd.DataFrame, bool, str, float, bool, str, bool]:
+
     market_ok, market_msg, index_ret, market_overheated = True, "", 0.0, False
     market_regime = "NEUTRAL"
     vol_surge = False
@@ -1761,12 +1833,31 @@ def extract_market_context(df_raw: pd.DataFrame, c_conf: Config) -> tuple[pd.Dat
         if C.S_PE in df_raw.columns and (df_raw[C.S_PE] == -1.0).sum() > len(df_raw) * 0.9: 
             fallback_warning = "\n\n> ⚠️ **数据源降级警报**\n> 频繁测试触发东方财富接口临时限制，已切至新浪备用源。基本面过滤(市盈率/量比等)暂时失效，请自行排雷！"
 
+        # Use get_ma_trend for CSI 300 or SH000001
+        trend_name, trend_desc = get_ma_trend(cl)
+        
+        # Append hot sectors explicitly
+        hot_map = fetch_hot_sectors()
+        hot_str = ""
+        if hot_map:
+            # Reverse map to count occurrences
+            from collections import Counter
+            sec_counts = Counter(hot_map.values())
+            top_sectors = [f"{s}({c})" for s, c in sec_counts.most_common(5)]
+            hot_str = f"\n- **核心主线**：{', '.join(top_sectors)}"
+            
+        # Optional: pull macro block if run_mode is normal and we want to attach it? Wait, we can attach macro block in normal mode too!
+        # The user requested: "将宏观诊断置于报告头部，热点主线紧随其后"
+        macro_str = generate_macro_section() + "\n\n"
+
         market_msg = (
-            f"### 📊 大盘多维体检\n"
+            f"{macro_str}"
+            f"### 📊 A股深度诊断\n"
+            f"- **大盘趋势 (MA系统)**：`{trend_name}` - {trend_desc}\n"
             f"- **上证指数**：`{cl.iloc[-1]:.2f}` (今日 **{pct:+.2f}%**)\n"
             f"- **综合判定**：{market_state}\n"
             f"- **市场广度**：红盘 `{up_count}` 家 / 绿盘 `{down_count}` 家 (涨停 `{zt_count}` / 跌停 `{dt_count}`)\n"
-            f"- **两市量能**：约 `{total_amt:.0f}` 亿元{sentiment_addon}{north_msg}\n\n"
+            f"- **两市量能**：约 `{total_amt:.0f}` 亿元{sentiment_addon}{north_msg}{hot_str}\n\n"
             f"**💡 仓位建议**：{advice}{fallback_warning}"
         )
     except Exception as e:
@@ -1876,16 +1967,19 @@ def send_dingtalk(signals: list[Signal], watchlist: list, total_pool: int, total
         f"> **{now_str}**\n>\n"
         f"> ⚠️ **郑重声明**：本报告由量化模型自动生成，仅供技术交流与策略复盘，**绝不构成任何投资建议**。股市有风险，入市需谨慎，盈亏请自负。\n\n"
     )
-    if run_mode == 'market_only':
+    if run_mode == 'market_only' or run_mode == 'morning':
         header = f"## 🤖 AI量化大盘深度体检\n> **{now_str}**\n\n"
-    elif run_mode != 'market_only' and total_market > 0:
+    elif run_mode not in ('market_only', 'morning') and total_market > 0:
         pass_rate = len(signals) / max(total_pool, 1) * 100 if total_pool > 0 else 0
         header += f"**🔬 漏斗数据**：全市场白名单 `{total_market}` 只，异动提取 `{total_pool}` 只，完美过线 `{len(signals)}` 只 (B+级以上优选率 **{pass_rate:.1f}%**)\n\n"
         
     if market_msg:
         header += f"{market_msg}\n\n---\n\n"
 
-    if run_mode == 'market_only':
+    if run_mode == 'morning':
+        # 早盘仅发宏观快报，这里直接用 generate_macro_section 生成极简版
+        content = f"## 🌅 AI量化开盘快报\n> **{now_str}**\n\n" + generate_macro_section() + "\n\n> 🔔 早盘重点监控外围风险，避免开盘盲目冲动。尾盘 14:45 将发送完整选股报告。"
+    elif run_mode == 'market_only':
         content = header + "✅ 大盘分析播报完毕，本次任务短路了全量个股运算。"
     elif "接口异常" in market_msg or "网络原因失败" in market_msg:
         content = header + "⚠️ 今日部分个股数据扫描因接口受限中断，已为您提供核心大盘分析参考。"
@@ -2000,8 +2094,8 @@ def get_signals() -> tuple[list[Signal], list, set, int, str, int]:
     if 'DATA_MODE' in df_raw.columns and (df_raw['DATA_MODE'] == 'T+1_FALLBACK').any():
         m_msg += "\n\n> 🚨 **严重警告**：今日所有实时行情流中断，当前所有技术信号均基于【昨日 T-1 收盘截面】生成，严禁用于今日盘中实盘交易！\n\n"
 
-    if config.RUN_MODE == 'market_only':
-        log.info("🤖 [大盘体检模式] 完毕，退出个股运算。")
+    if config.RUN_MODE in ('market_only', 'morning'):
+        log.info(f"🤖 [{config.RUN_MODE}模式] 完毕，退出个股运算。")
         return [], [], pushed, 0, m_msg, len(df_raw)
 
     paper_trades, win_stats = load_and_update_paper_trades(df_raw)

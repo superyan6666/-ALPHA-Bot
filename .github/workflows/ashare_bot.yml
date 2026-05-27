@@ -9,7 +9,7 @@ on:
   workflow_dispatch:
     inputs:
       run_mode:
-        description: '运行模式 (全量量化扫描 / 仅大盘体检 / 测试连通性 / 早盘播报)'
+        description: '运行模式 (全量量化扫描 / 仅大盘体检 / 测试连通性 / 早盘快报)'
         required: true
         default: 'normal'
         type: choice
@@ -17,7 +17,7 @@ on:
           - normal
           - market_only
           - test_conn
-          - briefing
+          - morning
       push_empty:
         description: '是否在无信号时也推送大盘状态报告？'
         required: false
@@ -76,7 +76,7 @@ jobs:
         run: |
           # 自动分发调度模式
           if [ "${{ github.event.schedule }}" == "35 1 * * 1-5" ]; then
-            RUN_MODE="briefing"
+            RUN_MODE="morning"
           elif [ "${{ github.event.schedule }}" == "45 6 * * 1-5" ]; then
             RUN_MODE="normal"
           fi
@@ -85,9 +85,9 @@ jobs:
             echo "🔔 检测到测试模式，执行钉钉与飞书连通性测试..."
             python test_spot_sources.py
             python main.py
-          elif [ "$RUN_MODE" == "briefing" ]; then
+          elif [ "$RUN_MODE" == "morning" ]; then
             echo "📊 启动早盘宏观与热门主线播报 Agent..."
-            python daily_briefing.py
+            python daily_morning.py
           elif [ "$RUN_MODE" == "market_only" ]; then
             echo "📊 检测到大盘体检模式，开始扫描宏观资金与情绪指标..."
             python main.py
