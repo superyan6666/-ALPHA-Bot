@@ -14,7 +14,12 @@ import requests
 import numpy as np
 import pandas as pd
 import pytz
+import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed, TimeoutError as FuturesTimeoutError
+
+_GLOBAL_SEMAPHORE = threading.Semaphore(2)
+_CONSECUTIVE_FAILURES = 0
+_MAX_FAILURES = 10
 
 from factors_config import Factor, get_factors_config
 # 导入区域结束
@@ -730,29 +735,41 @@ class DataProxy:
             log.debug(f"[Tier 2 BaoStock] 获取历史失败: {e}")
             return None
 
-    @retry(times=3, delay=2)
     def _fetch_hist_akshare(self, code, start, end):
-        try:
-            # 引入随机微型延迟 (0.1s ~ 0.4s) 以平滑并发请求，避免触发 WAF 行情接口封锁限制
-            time.sleep(random.uniform(0.1, 0.4))
-            df = ak.stock_zh_a_hist(symbol=code, period='daily', start_date=start, end_date=end, adjust='qfq')
-            if df is not None and not df.empty:
-                return df[list(Config.HIST_COLS)].copy()
-        except Exception as e:
-            try:
-                df = ak.stock_zh_a_hist_tx(symbol=code, start_date=start, end_date=end, adjust='qfq')
-                if df is not None and not df.empty:
-                    col_map = {'日期': C.H_DATE, '开盘': C.H_OPEN, '收盘': C.H_CLOSE, '最高': C.H_HIGH, '最低': C.H_LOW, '成交量': C.H_VOL}
-                    df = df.rename(columns=col_map)
-                    return df[list(Config.HIST_COLS)].copy()
-            except Exception:
-                pass
-            raise ValueError(f'akshare history empty for {code}')
+        global _CONSECUTIVE_FAILURES
+        if _CONSECUTIVE_FAILURES >= _MAX_FAILURES:
+            log.error(f"🔥 [RateLimit_CIRCUIT] 连续 {_CONSECUTIVE_FAILURES} 次获取历史失败，熔断机制触发，拒绝更多请求。")
+            return None
+        for attempt in range(3):
+            with _GLOBAL_SEMAPHORE:
+                try:
+                    # 引入随机微型延迟 (0.3s ~ 0.8s) 以平滑并发请求，避免触发 WAF 行情接口封锁限制
+                    time.sleep(random.uniform(0.3, 0.8))
+                    df = ak.stock_zh_a_hist(symbol=code, period='daily', start_date=start, end_date=end, adjust='qfq')
+                    if df is not None and not df.empty:
+                        _CONSECUTIVE_FAILURES = 0
+                        return df[list(Config.HIST_COLS)].copy()
+                except Exception as e:
+                    try:
+                        df = ak.stock_zh_a_hist_tx(symbol=code, start_date=start, end_date=end, adjust='qfq')
+                        if df is not None and not df.empty:
+                            col_map = {'日期': C.H_DATE, '开盘': C.H_OPEN, '收盘': C.H_CLOSE, '最高': C.H_HIGH, '最低': C.H_LOW, '成交量': C.H_VOL}
+                            df = df.rename(columns=col_map)
+                            _CONSECUTIVE_FAILURES = 0
+                            return df[list(Config.HIST_COLS)].copy()
+                    except Exception:
+                        pass
+                    
+                    backoff = (2 ** attempt) + random.uniform(0, 1)
+                    log.warning(f"⚠️ [Akshare] 获取 {code} 历史失败, 冷却 {backoff:.1f}s 后重试...")
+                    time.sleep(backoff)
+        _CONSECUTIVE_FAILURES += 1
+        raise ValueError(f'akshare history empty for {code}')
             
     def get_hist(self, code, start, end) -> pd.DataFrame:
-        df = self._fetch_hist_tushare(code, start, end)
-        if df is not None: return df
         df = self._fetch_hist_baostock(code, start, end)
+        if df is not None: return df
+        df = self._fetch_hist_tushare(code, start, end)
         if df is not None: return df
         return self._fetch_hist_akshare(code, start, end)
 
@@ -1028,22 +1045,35 @@ class LocalDataLake:
         if len(files) > 10: log.warning(f"  ...及其他 {len(files)-10} 个缓存文件。")
 
     def _get_cache(self, key: str, ttl_seconds: int):
+        parquet_filename = os.path.join(self.cache_dir, f"{key}.parquet")
         filename = os.path.join(self.cache_dir, f"{key}.pkl")
-        if not os.path.exists(filename): return None
+        
+        target_file = None
+        is_parquet = False
+        if os.path.exists(parquet_filename):
+            target_file = parquet_filename
+            is_parquet = True
+        elif os.path.exists(filename):
+            target_file = filename
+            
+        if not target_file: return None
         
         try:
-            with open(filename, 'rb') as f:
-                payload = pickle.load(f)
+            mtime = os.path.getmtime(target_file)
+            time_src = "文件系统"
             
-            # 兼容旧版本格式 (直接保存的 DataFrame)
-            time_src = "内部烙印"
-            if isinstance(payload, dict) and 'created_at' in payload and 'data' in payload:
-                mtime = payload['created_at']
-                data = payload['data']
+            if is_parquet:
+                data = pd.read_parquet(target_file)
             else:
-                mtime = os.path.getmtime(filename)
-                time_src = "文件系统"
-                data = payload
+                with open(target_file, 'rb') as f:
+                    payload = pickle.load(f)
+                
+                if isinstance(payload, dict) and 'created_at' in payload and 'data' in payload:
+                    mtime = payload['created_at']
+                    data = payload['data']
+                    time_src = "内部烙印"
+                else:
+                    data = payload
 
             age_seconds = time.time() - mtime
             age_days = age_seconds / 86400.0
@@ -1057,8 +1087,8 @@ class LocalDataLake:
                 
             if age_seconds < ttl_seconds:
                 return data
-        except Exception:
-            pass
+        except Exception as e:
+            log.debug(f"读取缓存异常 {key}: {e}")
             
         return None
 
@@ -1067,20 +1097,24 @@ class LocalDataLake:
         if isinstance(data, (pd.DataFrame, pd.Series)) and data.empty: return
         
         timestamp = int(time.time())
-        filename = os.path.join(self.cache_dir, f"{key}.pkl")
-        
-        payload = {
-            'created_at': timestamp,
-            'data': data
-        }
-        
         try:
-            with open(filename, 'wb') as f:
-                pickle.dump(payload, f)
+            if isinstance(data, pd.DataFrame):
+                filename = os.path.join(self.cache_dir, f"{key}.parquet")
+                # Ensure column names are strings for Parquet compatibility
+                data.columns = data.columns.astype(str)
+                data.to_parquet(filename, index=True)
+                os.utime(filename, (timestamp, timestamp))
+            else:
+                filename = os.path.join(self.cache_dir, f"{key}.pkl")
+                payload = {
+                    'created_at': timestamp,
+                    'data': data
+                }
+                with open(filename, 'wb') as f:
+                    pickle.dump(payload, f)
         except Exception as e:
             log.debug(f"缓存写入失败 {key}: {e}")
             
-        # 兼容清理老版本带时间戳的遗留缓存文件
         pattern = os.path.join(self.cache_dir, f"{key}_*.pkl")
         for old_file in glob.glob(pattern):
             try: os.remove(old_file)
@@ -1471,6 +1505,17 @@ def process_stock(row: pd.Series, raw_hist: pd.DataFrame, now: datetime, market_
     data['vol_ratio'] = float(row.get(C.S_VR, 1.0))
     data['rs_rating'] = ((row[C.S_PRICE] / data['close_60d_ago'] - 1) * 100 - index_ret) if data['close_60d_ago'] > 0 else 0
     data['code'] = str(row[C.S_CODE])
+    
+    mom_3m = hist[C.H_CLOSE].pct_change(63).iloc[-1] if len(hist) > 63 else 0
+    mom_12m = hist[C.H_CLOSE].pct_change(252).iloc[-1] if len(hist) > 252 else (hist[C.H_CLOSE].iloc[-1] / hist[C.H_CLOSE].iloc[0] - 1)
+    mom_3m_ann = (1 + mom_3m) ** 4 - 1 if not pd.isna(mom_3m) else 0
+    mom_12m_ann = mom_12m if not pd.isna(mom_12m) else 0
+    data['mom_accel'] = mom_3m_ann - mom_12m_ann
+    
+    high_250d = hist[C.H_HIGH].rolling(250, min_periods=60).max().iloc[-1]
+    current_price = hist[C.H_CLOSE].iloc[-1]
+    dist_to_high = (current_price - high_250d) / high_250d if high_250d > 0 else -1
+    data['breakout_intensity'] = max(0, 1 + dist_to_high)
     
     data['in_hot_sector'] = data['code'] in hot_sectors_map
     data['hot_sector_name'] = hot_sectors_map.get(data['code'], "热门")

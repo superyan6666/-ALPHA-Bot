@@ -47,6 +47,10 @@ def get_factors_config(f_val: float, f_mom: float, f_rev: float, f_risk: float,
         Factor(lambda d: d.get('price_pct', 0.0) > 0.45, 6, f_mom, "- 📈 **多头趋势**：股价已脱离底部，处于健康的主升浪区间", FactorGroup.POS),
         Factor(lambda d: d.get('price_pct', 0.0) > 0.85, 8, f_mom, "- 🚀 **高位突破**：股价处于年度高位，强者恒强趋势极佳", FactorGroup.POS), 
         
+        Factor(lambda d: d.get('mom_accel', 0) > 0.5, 10, f_mom, "- 🌪️ **动量加速**：近期动能出现显著加速，呈现十倍股爆发特征", FactorGroup.MOM),
+        Factor(lambda d: d.get('breakout_intensity', 0) > 0.95 and d.get('vol_ratio', 1.0) > 1.5, 12, f_mom, "- 🚀 **强势突破**：距离年度新高极近且伴随量能显著放大", FactorGroup.MOM),
+        Factor(lambda d: d.get('rs_rating', 0) < -5.0, -10, f_risk, "- ⚠️ **弱于大盘**：阶段性明显跑输大盘，存在隐性被动抛压", FactorGroup.MOM),
+        
         Factor(lambda d: d.get('pe', -1) > 0 and d.get('pe', 100) < 40, 5, f_val, "- 🛡️ **业绩护体**：市盈率健康，不是炒空气的无基本面股", FactorGroup.VAL),
         Factor(lambda d: d.get('macd_dea', -1.0) >= -0.05, 5, 1.0, "- 🌊 **多头控盘**：大周期趋势仍强，没有被深套的风险", FactorGroup.TREND), 
         
