@@ -1339,6 +1339,9 @@ class AShareTechnicals:
             'wq_41_divergence': bool((today[C.H_CLOSE] >= today[C.H_OPEN]) and 
                                      (len(df) >= 60 and (today[C.H_CLOSE] - df[C.H_CLOSE].iloc[-60:].min()) / (df[C.H_CLOSE].iloc[-60:].max() - df[C.H_CLOSE].iloc[-60:].min() + 1e-5) > 0.90) and 
                                      (today[C.H_VOL] < today['MA20_V'] * 0.5)),
+            'clv': float((today[C.H_CLOSE] - today[C.H_LOW]) / (today[C.H_HIGH] - today[C.H_LOW])) if today[C.H_HIGH] > today[C.H_LOW] else -1.0,
+            'overnight_return': float((today[C.H_OPEN] / yest[C.H_CLOSE] - 1) * 100) if pd.notna(today[C.H_OPEN]) and pd.notna(yest[C.H_CLOSE]) and yest[C.H_CLOSE] > 0 else 0.0,
+            'pct_chg': float(today.get('PCT_CHG', 0.0)),
         }
 
 
