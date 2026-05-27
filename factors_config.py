@@ -88,9 +88,9 @@ def get_factors_config(f_val: float, f_mom: float, f_rev: float, f_risk: float,
         Factor(lambda d: d.get('upper_shadow_pct', 0) > 35, -15, f_risk, "- ⚠️ **诱多预警**：冲高后大幅跳水，上方抛压极重别上当！"),
         Factor(lambda d: d.get('dist_ma20', 0) > 25, -15, f_risk, "- 🚫 **追高预警**：目前涨得太急离均线太远，随时面临暴跌回调"),
         Factor(lambda d: d.get('sm_corr', 0) >= 0.5, -10, f_risk, "- ⚠️ **量价正向失真**：量价高度正相关且无实质突破，散户情绪狂热 (聪明钱反向扣分)"),
-        Factor(lambda d: d.get('amihud_20', 0) > 5000, -15, f_risk, "- 🩸 **流动性枯竭**：单位成交额撬动极大涨幅，典型的强庄控盘或杀猪盘，一碰就炸！"),
+        Factor(lambda d: d.get('amihud_20_rank', 0) > 0.90, -15, f_risk, "- 🩸 **流动性枯竭**：当前Amihud处于历史前10%的高危区，单位成交额撬动极大涨幅，典型的强庄控盘或杀猪盘，一碰就炸！"),
         Factor(lambda d: d.get('wq_41_divergence', False), -15, f_risk, "- ☠️ **高位无量空涨**：股价创出近期新高但量能极度萎缩，资金接力枯竭，随时雪崩崩盘！"),
         Factor(lambda d: d.get('clv', -1.0) != -1.0 and d.get('clv', 1.0) < 0.05 and -9.5 < d.get('pct_chg', 0) < -3.0, -10, f_risk, "- 🩸 **尾盘无护盘**：全天极弱光脚大阴线，主力坚决派发且尾盘无抢筹 (Alpha 053)"),
-        Factor(lambda d: d.get('overnight_return', 0.0) < -2.0 and d.get('amihud_20', 0) > 5000, -15, f_risk, "- ☠️ **跳空踩踏陷阱**：低流动性标的出现致命向下跳空，开盘即被砸，极易引发散户恐慌踩踏！"),
+        Factor(lambda d: d.get('overnight_return', 0.0) < -2.0 and d.get('amihud_20_rank', 0) > 0.90, -15, f_risk, "- ☠️ **跳空踩踏陷阱**：高Amihud低流动性标的出现致命向下跳空，开盘即被砸，极易引发散户恐慌踩踏！"),
         Factor(lambda d: in_danger and d.get('mcap', 100e8) < 100e8, -8, f_risk, f"- 📅 **财报防雷**：当前属于{danger_label}，小盘股需防业绩变脸 (扣分)")
     ]

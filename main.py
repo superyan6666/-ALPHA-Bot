@@ -716,11 +716,20 @@ class DataProxy:
             prefix = 'sh.' if code.startswith('6') else 'sz.'
             start_fmt = f"{start[:4]}-{start[4:6]}-{start[6:]}"
             end_fmt = f"{end[:4]}-{end[4:6]}-{end[6:]}"
-            rs = bs.query_history_k_data_plus(prefix + code,
-                "date,open,close,high,low,volume",
-                start_date=start_fmt, end_date=end_fmt,
-                frequency="d", adjustflag="1")
             
+            def _do_query():
+                return bs.query_history_k_data_plus(prefix + code,
+                    "date,open,close,high,low,volume",
+                    start_date=start_fmt, end_date=end_fmt,
+                    frequency="d", adjustflag="1")
+            
+            with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+                future = executor.submit(_do_query)
+                rs = future.result(timeout=10) # 10s 超时防卡死
+            
+            if rs is None or rs.error_code != '0':
+                return None
+                
             data_list = []
             while (rs.error_code == '0') & rs.next():
                 data_list.append(rs.get_row_data())
@@ -896,7 +905,16 @@ class DataProxy:
             self._login_baostock()
             bs_symbol = 'sh.' + symbol if symbol.startswith('0') else 'sz.' + symbol
             start_fmt = (datetime.now() - timedelta(days=365)).strftime('%Y-%m-%d')
-            rs = bs.query_history_k_data_plus(bs_symbol, "date,open,close,high,low,volume", start_date=start_fmt, frequency="d")
+            def _do_index_query():
+                return bs.query_history_k_data_plus(bs_symbol, "date,open,close,high,low,volume", start_date=start_fmt, frequency="d")
+                
+            with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+                future = executor.submit(_do_index_query)
+                rs = future.result(timeout=10)
+                
+            if rs is None or rs.error_code != '0':
+                return None
+                
             data_list = []
             while (rs.error_code == '0') & rs.next():
                 data_list.append(rs.get_row_data())
@@ -1224,6 +1242,7 @@ class AShareTechnicals:
         amihud_raw = self.df['PCT_CHG'].abs() / (vol * close + 1e-5) * 1e6
         self.df['AMIHUD'] = np.where(is_limit, 99999.0, amihud_raw)
         self.df['AMIHUD_20'] = self.df['AMIHUD'].rolling(20).mean()
+        self.df['AMIHUD_20_RANK'] = self.df['AMIHUD_20'].rolling(252, min_periods=20).rank(pct=True)
         self.df['IS_LIMIT'] = is_limit
         
         self.today = self.df.iloc[-1]
