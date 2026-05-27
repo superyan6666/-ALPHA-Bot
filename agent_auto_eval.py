@@ -18,9 +18,41 @@ class SandboxEvaluator:
         self.start_date = start_date
         self.end_date = end_date or datetime.now().strftime("%Y%m%d")
         
-    def fetch_data(self, stock_list):
-        """Fetch panel data for the given stocks."""
-        log.info(f"Fetching data for {len(stock_list)} stocks from {self.start_date} to {self.end_date}...")
+    def fetch_data(self, stock_list=None):
+        """Fetch panel data from local parquet data lake or fallback to network."""
+        parquet_path = ".quantbot_data/ashare_daily.parquet"
+        if os.path.exists(parquet_path):
+            log.info(f"Found offline data lake at {parquet_path}. Loading into memory (this may take a few seconds)...")
+            try:
+                panel = pd.read_parquet(parquet_path)
+                
+                # Normalize column names
+                panel = panel.rename(columns={'date': 'date', 'code': 'code', 'open': 'open', 'close': 'close', 'high': 'high', 'low': 'low', 'volume': 'vol'})
+                
+                # Filter by date
+                start_dt = pd.to_datetime(self.start_date)
+                end_dt = pd.to_datetime(self.end_date)
+                panel['date'] = pd.to_datetime(panel['date'])
+                panel = panel[(panel['date'] >= start_dt) & (panel['date'] <= end_dt)].copy()
+                
+                # Normalize code format from sh.600000 to 600000 if needed
+                panel['code'] = panel['code'].str.replace('sh.', '', regex=False).str.replace('sz.', '', regex=False).str.replace('bj.', '', regex=False)
+                
+                if stock_list and stock_list != "ALL":
+                    panel = panel[panel['code'].isin(stock_list)]
+                    
+                panel = panel.sort_values(['code', 'date']).reset_index(drop=True)
+                log.info(f"Loaded {len(panel)} rows from data lake.")
+                return panel
+            except Exception as e:
+                log.error(f"Failed to load from parquet: {e}. Falling back to network fetch.")
+                
+        # Fallback to network fetching
+        if stock_list is None or stock_list == "ALL":
+            log.error("Network fetching for ALL stocks is blocked to prevent IP ban. Please build the data lake first.")
+            return None
+            
+        log.info(f"Fetching data for {len(stock_list)} stocks from {self.start_date} to {self.end_date} via network...")
         all_dfs = []
         for code in stock_list:
             df = self.dp.get_hist(code, self.start_date, self.end_date)
@@ -152,10 +184,10 @@ if __name__ == "__main__":
     # 否则在下行周期（如2022-2024）中，基于当下存活股票的历史测算会导致收益率虚高。
     # 后续演进路线将引入 Tushare/Baostock 的历史成分股动态切片功能。
     
-    # Use a static subset of CSI 300 for quick testing
-    test_pool = ["600519", "601318", "600036", "000858", "002594", 
-                 "000333", "600276", "601012", "300750", "002415",
-                 "601899", "601888", "603288", "000001", "000002"]
+    # test_pool = ["600519", "601318", "600036", "000858", "002594", 
+    #              "000333", "600276", "601012", "300750", "002415",
+    #              "601899", "601888", "603288", "000001", "000002"]
+    test_pool = "ALL"
                  
     panel = evaluator.fetch_data(test_pool)
     if panel is not None:

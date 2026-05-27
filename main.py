@@ -721,15 +721,12 @@ class DataProxy:
             start_fmt = f"{start[:4]}-{start[4:6]}-{start[6:]}"
             end_fmt = f"{end[:4]}-{end[4:6]}-{end[6:]}"
             
-            def _do_query():
-                return bs.query_history_k_data_plus(prefix + code,
-                    "date,open,close,high,low,volume",
-                    start_date=start_fmt, end_date=end_fmt,
-                    frequency="d", adjustflag="1")
-            
-            with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
-                future = executor.submit(_do_query)
-                rs = future.result(timeout=10) # 10s 超时防卡死
+            rs = bs.query_history_k_data_plus(
+                prefix + code,
+                "date,open,close,high,low,volume,amount",
+                start_date=start_fmt, end_date=end_fmt,
+                frequency="d", adjustflag="2"
+            )
             
             if rs is None or rs.error_code != '0':
                 return None
@@ -745,7 +742,7 @@ class DataProxy:
                 df[col] = pd.to_numeric(df[col], errors='coerce')
             return df[list(Config.HIST_COLS)]
         except Exception as e:
-            log.debug(f"[Tier 2 BaoStock] 获取历史失败: {e}")
+            log.debug(f"[Tier 1 BaoStock] 获取历史失败: {e}")
             return None
 
     def _fetch_hist_akshare(self, code, start, end):
