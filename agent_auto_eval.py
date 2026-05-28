@@ -144,6 +144,29 @@ class SandboxEvaluator:
         panel['alpha_reversal_5d'] = - (panel['close'] / panel.groupby('code')['close'].shift(5) - 1)
         panel['alpha_024_approx'] = panel.groupby('code')['close'].transform(lambda x: x.rolling(20).mean()) / (panel['close'] + 1e-5) - 1
         
+        # 6. Market Regime Proxy (Global Broadcast)
+        log.info("Computing Market Regime Features...")
+        # Cross-sectional equal-weighted average return of the market
+        market_daily = panel.groupby('date')['pct_chg'].mean().reset_index()
+        market_daily.rename(columns={'pct_chg': 'market_ret'}, inplace=True)
+        market_daily['market_ret_20d'] = market_daily['market_ret'].rolling(20, min_periods=5).mean()
+        market_daily['market_ret_60d'] = market_daily['market_ret'].rolling(60, min_periods=20).mean()
+        market_daily['market_vol_20d'] = market_daily['market_ret'].rolling(20, min_periods=5).std()
+        
+        # Merge back to panel
+        panel = pd.merge(panel, market_daily[['date', 'market_ret_20d', 'market_ret_60d', 'market_vol_20d']], on='date', how='left')
+        
+        # Merge Macro Features (China 10Y Trend)
+        macro_path = '.quantbot_data/macro_daily.parquet'
+        if os.path.exists(macro_path):
+            macro_df = pd.read_parquet(macro_path)
+            # Merge on date, and forward fill in case some dates are missing in macro_df
+            panel = pd.merge(panel, macro_df[['cn_10y_trend']], left_on='date', right_index=True, how='left')
+            panel['cn_10y_trend'] = panel['cn_10y_trend'].ffill()
+        else:
+            log.warning(f"Macro data not found at {macro_path}. cn_10y_trend will be NaN.")
+            panel['cn_10y_trend'] = np.nan
+        
         return panel
         
     def evaluate_ml_model(self, panel):
@@ -156,65 +179,88 @@ class SandboxEvaluator:
         # Filter limits
         panel = panel[~panel['is_limit']].copy()
         
-        feature_cols = ['sm_corr', 'clv', 'volatility_5d', 'vol_ratio', 'alpha_reversal_5d', 'alpha_024_approx']
+        feature_cols = ['sm_corr', 'clv', 'volatility_5d', 'vol_ratio', 'alpha_reversal_5d', 'alpha_024_approx',
+                        'market_ret_20d', 'market_ret_60d', 'market_vol_20d', 'cn_10y_trend']
         
         # Drop NaNs
         ml_df = panel.dropna(subset=feature_cols + ['fwd_ret_real', 'date']).copy()
         
-        # Train / Test split
-        # We will train on the first 80% of dates, test on last 20%
         dates = sorted(ml_df['date'].unique())
-        split_idx = int(len(dates) * 0.8)
-        train_dates = dates[:split_idx]
-        test_dates = dates[split_idx:]
-        
-        train_df = ml_df[ml_df['date'].isin(train_dates)].copy()
-        test_df = ml_df[ml_df['date'].isin(test_dates)].copy()
-        
-        log.info(f"Train set: {len(train_df)} rows ({train_dates[0].strftime('%Y-%m-%d')} to {train_dates[-1].strftime('%Y-%m-%d')})")
-        log.info(f"Test set: {len(test_df)} rows ({test_dates[0].strftime('%Y-%m-%d')} to {test_dates[-1].strftime('%Y-%m-%d')})")
-        
-        if len(train_df) == 0 or len(test_df) == 0:
-            log.warning("Not enough data for ML evaluation.")
+        if len(dates) < 500:
+            log.warning("Not enough dates for WFO (need > 500).")
             return
             
-        ltr = XGBoostLTR()
-        ltr.train(train_df, feature_cols, target_col='fwd_ret_real', group_col='date')
+        train_window = 500
+        step = 125
         
-        # Feature Importance
-        imp_df = ltr.get_feature_importance(feature_cols)
-        log.info("XGBoost Feature Importance (Gain):")
-        for _, row in imp_df.iterrows():
-            log.info(f"  {row['feature']}: {row['importance']:.4f}")
+        all_test_preds = []
+        feature_importances = []
+        
+        log.info(f"Starting Walk-Forward Optimization (Train={train_window}d, Step={step}d)")
+        
+        for idx in range(train_window, len(dates), step):
+            train_dates = dates[max(0, idx - train_window):idx]
+            test_dates = dates[idx:min(len(dates), idx + step)]
             
-        # Prediction and evaluation on Test Set
-        test_df['xgb_score'] = ltr.predict(test_df, feature_cols)
+            if len(test_dates) == 0:
+                break
+                
+            train_df = ml_df[ml_df['date'].isin(train_dates)].copy()
+            test_df = ml_df[ml_df['date'].isin(test_dates)].copy()
+            
+            # Diagnostic: Market State Comparison
+            train_mkt = train_df['market_ret_20d'].mean()
+            test_mkt = test_df['market_ret_20d'].mean()
+            log.info(f"--- Fold [{test_dates[0].strftime('%Y-%m-%d')} to {test_dates[-1].strftime('%Y-%m-%d')}] ---")
+            log.info(f"Train State (mkt_ret_20d mean): {train_mkt:.4f} | Test State: {test_mkt:.4f}")
+            if abs(train_mkt - test_mkt) > 0.5:
+                log.warning(f"Significant market state shift detected between train and test!")
+                
+            ltr = XGBoostLTR()
+            ltr.train(train_df, feature_cols, target_col='fwd_ret_real', group_col='date')
+            
+            # Store importance
+            imp_df = ltr.get_feature_importance(feature_cols)
+            feature_importances.append(imp_df.set_index('feature')['importance'])
+            
+            # Predict
+            test_df['xgb_score'] = ltr.predict(test_df, feature_cols)
+            all_test_preds.append(test_df[['date', 'code', 'xgb_score', 'fwd_ret_real']])
+            
+        if not all_test_preds:
+            log.error("No WFO predictions generated.")
+            return
+            
+        # Compile all OOS predictions
+        oos_df = pd.concat(all_test_preds, ignore_index=True)
+        log.info(f"WFO Completed. Total OOS predictions: {len(oos_df)}")
         
-        # Group by prediction deciles
+        # Aggregate Feature Importances
+        agg_imp = pd.concat(feature_importances, axis=1).mean(axis=1).sort_values(ascending=False)
+        log.info("Average WFO Feature Importance (Gain):")
+        for feat, gain in agg_imp.items():
+            log.info(f"  {feat}: {gain:.4f}")
+        
+        # Group by prediction deciles across the concatenated OOS dataframe
         def _group_pred(group):
             if len(group) < 5: return pd.Series(index=group.index, dtype=float)
             try:
-                # 5 quantiles
                 return pd.qcut(group['xgb_score'], 5, labels=[1, 2, 3, 4, 5], duplicates='drop')
             except:
                 return pd.Series(index=group.index, dtype=float)
                 
-        test_df['xgb_quantile'] = test_df.groupby('date').apply(_group_pred).reset_index(0, drop=True)
-        test_df = test_df.dropna(subset=['xgb_quantile'])
+        oos_df['xgb_quantile'] = oos_df.groupby('date').apply(_group_pred).reset_index(0, drop=True)
+        oos_df = oos_df.dropna(subset=['xgb_quantile'])
         
         # Calc returns (using realistic friction-aware return)
-        group_returns = test_df.groupby('xgb_quantile')['fwd_ret_real'].mean() * 10000 # bps
+        group_returns = oos_df.groupby('xgb_quantile')['fwd_ret_real'].mean() * 10000 # bps
         
-        log.info("XGBoost Out-of-Sample Daily Mean Return by Quantile (bps):")
+        log.info("WFO Out-of-Sample Daily Mean Return by Quantile (bps):")
         for q, ret in group_returns.items():
             log.info(f"  Q{q}: {ret:.2f} bps")
             
         ls_ret = group_returns.get(5, 0) - group_returns.get(1, 0)
-        log.info(f"XGBoost Long-Short Spread (Q5-Q1): {ls_ret:.2f} bps/day")
-        
-        # Turnover approx
-        q5_stocks = test_df[test_df['xgb_quantile'] == 5]
-        log.info(f"Average stocks in Q5 per day: {len(q5_stocks) / len(test_dates):.1f}")
+        log.info(f"WFO Long-Short Spread (Q5-Q1): {ls_ret:.2f} bps/day")
     def evaluate(self, panel, factor_name):
         """Evaluate a specific factor."""
         log.info(f"--- Evaluating Factor: {factor_name} ---")
