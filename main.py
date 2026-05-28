@@ -153,131 +153,6 @@ def _patched_request(self, method, url, **kwargs):
 
 requests.Session.request = _patched_request
 
-# ═════════════════════════════════════════════════════════════════════════════
-# 1.5 统一通知网关 (Unified Notification Gateway)
-# ═════════════════════════════════════════════════════════════════════════════
-class NotificationGateway:
-    @classmethod
-    def send(cls, title: str, content: str, template: str = "blue") -> None:
-        webhooks = []
-        if config.DINGTALK_WEBHOOK:
-            webhooks.append((config.DINGTALK_WEBHOOK, "dingtalk"))
-        if config.FEISHU_WEBHOOK:
-            webhooks.append((config.FEISHU_WEBHOOK, "feishu"))
-            
-        if not webhooks:
-            log.error("❌ 未配置任何 Webhook 环境变量，取消推送！")
-            return
-            
-        CHUNK_SIZE = 18000
-        if len(content) <= CHUNK_SIZE:
-            chunks = [content]
-        else:
-            log.warning(f"⚠️ 推送消息长度({len(content)})突破限制，启动分片推送机制...")
-            chunks = [content[i:i+CHUNK_SIZE] for i in range(0, len(content), CHUNK_SIZE)]
-            if len(chunks) > 3:
-                log.warning(f"⚠️ 预警内容极长 (片段数: {len(chunks)})，强行截断至前 3 篇以防流控！")
-                chunks = chunks[:3]
-                chunks[-1] += "\n\n> ⚠️ *(本文因超出承载极限，尾部数据已被系统强制截断)*"
-                
-        for idx, chunk in enumerate(chunks):
-            if len(chunks) > 1:
-                chunk_title = f"{title} (Part {idx+1}/{len(chunks)})"
-                chunk_text = chunk if idx == 0 else f"_(续上条)_\n\n{chunk}"
-            else:
-                chunk_title = title
-                chunk_text = chunk
-                
-            for webhook_url, platform in webhooks:
-                cls._send_with_retry(webhook_url, platform, chunk_title, chunk_text, template)
-                
-            if idx < len(chunks) - 1:
-                time.sleep(1.0)
-
-    @classmethod
-    def _send_with_retry(cls, url: str, platform: str, title: str, text: str, template: str = "blue") -> None:
-        sec_keyword = getattr(config, 'NOTIFY_SEC_KEYWORD', 'AI量化')
-        headers = {"Content-Type": "application/json"}
-        
-        final_title = title if sec_keyword in title else f"{sec_keyword} | {title}"
-        final_text = text
-        if sec_keyword not in final_text:
-            final_text = f"🤖 **{sec_keyword}推送**\n\n{final_text}"
-            
-        if platform == "feishu":
-            payload = {
-                "msg_type": "interactive",
-                "card": {
-                    "header": {
-                        "title": {
-                            "tag": "plain_text",
-                            "content": final_title
-                        },
-                        "template": template
-                    },
-                    "elements": [
-                        {
-                            "tag": "markdown",
-                            "content": final_text
-                        }
-                    ]
-                }
-            }
-        else:
-            payload = {
-                'msgtype': 'markdown',
-                'markdown': {
-                    'title': final_title,
-                    'text': final_text
-                }
-            }
-            
-        max_attempts = 2
-        for attempt in range(1, max_attempts + 1):
-            try:
-                res = requests.post(url, json=payload, headers=headers, timeout=10.0)
-                if res.status_code == 502:
-                    raise requests.exceptions.HTTPError("502 Server Error: Bad Gateway", response=res)
-                res.raise_for_status()
-                
-                res_dict = res.json()
-                is_err = False
-                if platform == "feishu":
-                    if res_dict.get('code', 0) != 0:
-                        is_err = True
-                else:
-                    if res_dict.get('errcode', 0) != 0:
-                        is_err = True
-                        
-                if is_err:
-                    log.error(f"❌ Webhook 推送失败 ({url[:30]}...): {res_dict}")
-                else:
-                    log.info(f"✅ Webhook 推送成功 ({url[:30]}...)")
-                break
-                
-            except (requests.exceptions.RequestException, requests.exceptions.HTTPError) as e:
-                is_retryable = False
-                if isinstance(e, requests.exceptions.Timeout):
-                    is_retryable = True
-                elif isinstance(e, requests.exceptions.HTTPError) and e.response is not None and e.response.status_code == 502:
-                    is_retryable = True
-                elif isinstance(e, requests.exceptions.ConnectionError):
-                    is_retryable = True
-                    
-                if is_retryable and attempt < max_attempts:
-                    log.warning(f"⚠️ Webhook 推送尝试 {attempt} 失败 (原因: {e})，正在进行重试...")
-                    time.sleep(1.0)
-                    continue
-                else:
-                    log.error(f"❌ Webhook 推送网络异常 ({url[:30]}...) (尝试 {attempt}/{max_attempts}): {e}")
-                    break
-            except Exception as e:
-                log.error(f"❌ Webhook 推送未知异常 ({url[:30]}...): {e}")
-                break
-
-if not os.path.exists(HIST_CACHE_DIR):
-    os.makedirs(HIST_CACHE_DIR, exist_ok=True)
-
 def _today_str() -> str:
     return datetime.now(TZ_BJS).strftime('%Y-%m-%d')
 
@@ -815,7 +690,7 @@ class DataProxy:
 
     def _fetch_spot_tencent(self) -> pd.DataFrame:
         log.info("🚀 启动备用源: 腾讯原生 API (gtimg)...")
-        pool = self.get_core_pool()
+        pool = list(self.get_core_pool())
         if not pool: return None
         
         # 将 pool 切分为每批 50 个以防止 URL 过长
@@ -876,7 +751,7 @@ class DataProxy:
 
     def _fetch_spot_netease(self) -> pd.DataFrame:
         log.warning("⚠️ 启动三级备用源: 网易原生 API (126.net)...")
-        pool = self.get_core_pool()
+        pool = list(self.get_core_pool())
         if not pool: return None
         
         batch_size = 50
@@ -1023,7 +898,7 @@ class DataProxy:
             def _do_index_query():
                 return bs.query_history_k_data_plus(bs_symbol, "date,open,close,high,low,volume", start_date=start_fmt, frequency="d")
                 
-            with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+            with ThreadPoolExecutor(max_workers=1) as executor:
                 future = executor.submit(_do_index_query)
                 rs = future.result(timeout=10)
                 
@@ -1255,7 +1130,7 @@ class LocalDataLake:
 
     def fetch_spot(self) -> pd.DataFrame:
         now = datetime.now(TZ_BJS)
-        ttl = 3600 if now.hour >= 15 and now.minute >= 30 else 300 # 盘后延长TTL避免无意义请求
+        ttl = 3600 if (now.hour > 15 or (now.hour == 15 and now.minute >= 30)) else 300 # 盘后延长TTL避免无意义请求
         cached = self._get_cache("spot", ttl)
         if cached is not None:
             if config.DATA_CACHE_MODE != 'offline': log.info(f"📦 命中 spot 本地实时缓存(当前时效 {ttl} 秒)...")
@@ -1357,7 +1232,7 @@ class AShareTechnicals:
         amihud_raw = self.df['PCT_CHG'].abs() / (vol * close + 1e-5) * 1e6
         self.df['AMIHUD'] = np.where(is_limit, 99999.0, amihud_raw)
         self.df['AMIHUD_20'] = self.df['AMIHUD'].rolling(20).mean()
-        self.df['AMIHUD_20_RANK'] = self.df['AMIHUD_20'].rolling(252, min_periods=20).rank(pct=True)
+        self.df['AMIHUD_20_RANK'] = self.df['AMIHUD_20'].expanding(min_periods=20).rank(pct=True)
         self.df['IS_LIMIT'] = is_limit
         
         self.today = self.df.iloc[-1]
@@ -1380,7 +1255,7 @@ class AShareTechnicals:
         if pd.isna(rsi) or rsi > 85: return None 
 
         consecutive_down = 0
-        for i in range(2, 8):
+        for i in range(1, 8):
             if len(df) >= i and df[C.H_CLOSE].iloc[-i] < df[C.H_OPEN].iloc[-i]:
                 consecutive_down += 1
             else:
@@ -1470,6 +1345,7 @@ class AShareTechnicals:
             'close_60d_ago': float(df[C.H_CLOSE].iloc[-60]) if len(df) >= 60 else 0.0,
             'sm_corr': float(today.get('SM_CORR', 0.0)) if len(df) >= 60 and not bool(today.get('IS_LIMIT', False)) and not pd.isna(today.get('SM_CORR')) else 0.0,
             'amihud_20': float(today.get('AMIHUD_20', 0.0)) if not pd.isna(today.get('AMIHUD_20')) else 0.0,
+            'amihud_20_rank': float(today.get('AMIHUD_20_RANK', 0.0)) if not pd.isna(today.get('AMIHUD_20_RANK')) else 0.0,
             'wq_41_divergence': bool((today[C.H_CLOSE] >= today[C.H_OPEN]) and 
                                      (len(df) >= 60 and (today[C.H_CLOSE] - df[C.H_CLOSE].iloc[-60:].min()) / (df[C.H_CLOSE].iloc[-60:].max() - df[C.H_CLOSE].iloc[-60:].min() + 1e-5) > 0.90) and 
                                      (today[C.H_VOL] < today['MA20_V'] * 0.5)),
@@ -1684,11 +1560,11 @@ def process_stock(row: pd.Series, raw_hist: pd.DataFrame, now: datetime, market_
     return (data, stop, risk_pct) 
 
 
-import yfinance as yf
 
 def generate_macro_section() -> str:
     """获取外围宏观数据，生成早盘宏观快报的内容"""
     try:
+        import yfinance as yf
         tickers = yf.Tickers("^TNX ^VIX ^SKEW HG=F GC=F CL=F ^GSPC")
         hist = tickers.history(period="5d")
         close_df = hist['Close']
@@ -2244,7 +2120,7 @@ def get_signals() -> tuple[list[Signal], list, set, int, str, int]:
     save_paper_trades(paper_trades)
 
     return final_confirmed, watchlist_data, pushed, len(pool), m_msg, len(df_clean)
-# (Deleted duplicate send_dingtalk function to follow DRY principles)
+
 
 if __name__ == '__main__':
     try:

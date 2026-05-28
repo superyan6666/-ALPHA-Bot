@@ -87,7 +87,7 @@ jobs:
             python main.py
           elif [ "$RUN_MODE" == "morning" ]; then
             echo "📊 启动早盘宏观与热门主线播报 Agent..."
-            python daily_morning.py
+            python main.py
           elif [ "$RUN_MODE" == "market_only" ]; then
             echo "📊 检测到大盘体检模式，开始扫描宏观资金与情绪指标..."
             python main.py

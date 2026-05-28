@@ -44,8 +44,8 @@ def get_factors_config(f_val: float, f_mom: float, f_rev: float, f_risk: float,
         
         Factor(lambda d: d.get('price_pct', 1.0) < 0.25, 12, f_rev * rw, "- 🟢 **绝对低位**：目前买入相当于抄底，长线持有安全", FactorGroup.POS),
         Factor(lambda d: 0.25 <= d.get('price_pct', 1.0) <= 0.45, 8, f_rev, "- 🟢 **相对低位**：刚刚从底部爬起来，输时间不输钱", FactorGroup.POS),
-        Factor(lambda d: d.get('price_pct', 0.0) > 0.45, 6, f_mom, "- 📈 **多头趋势**：股价已脱离底部，处于健康的主升浪区间", FactorGroup.POS),
-        Factor(lambda d: d.get('price_pct', 0.0) > 0.85, 8, f_mom, "- 🚀 **高位突破**：股价处于年度高位，强者恒强趋势极佳", FactorGroup.POS), 
+        Factor(lambda d: 0.45 < d.get('price_pct', 1.0) <= 0.85, 6, f_mom, "- 📈 **多头趋势**：股价已脱离底部，处于健康的主升浪区间", FactorGroup.POS),
+        Factor(lambda d: d.get('price_pct', 0.0) > 0.85, 8, f_mom, "- 🚀 **高位突破**：股价处于年度高位，强者恒强趋势极佳", "POS_HIGH_BREAK"), 
         
         Factor(lambda d: d.get('mom_accel', 0) > 0.5, 10, f_mom, "- 🌪️ **动量加速**：近期动能出现显著加速，呈现十倍股爆发特征", FactorGroup.MOM),
         Factor(lambda d: d.get('breakout_intensity', 0) > 0.95 and d.get('vol_ratio', 1.0) > 1.5, 12, f_mom, "- 🚀 **强势突破**：距离年度新高极近且伴随量能显著放大", FactorGroup.MOM),
