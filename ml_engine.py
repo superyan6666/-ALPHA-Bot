@@ -53,6 +53,14 @@ class XGBoostLTR:
         imp_df = pd.DataFrame({'feature': feature_cols, 'importance': importance})
         imp_df = imp_df.sort_values('importance', ascending=False)
         return imp_df
+        
+    def save_model(self, filepath: str):
+        log.info(f"Saving XGBRanker model to {filepath}")
+        self.model.save_model(filepath)
+        
+    def load_model(self, filepath: str):
+        log.info(f"Loading XGBRanker model from {filepath}")
+        self.model.load_model(filepath)
 
 def apply_liquidity_gate(panel, amihud_col='amihud_20', threshold_pct=0.90):
     """

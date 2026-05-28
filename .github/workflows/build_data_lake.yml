@@ -28,7 +28,7 @@ jobs:
     - name: Install dependencies
       run: |
         python -m pip install --upgrade pip
-        pip install baostock pandas pyarrow fastparquet akshare
+        pip install baostock pandas pyarrow fastparquet akshare xgboost scikit-learn
 
     - name: Build Data Lake
       run: |
@@ -38,9 +38,26 @@ jobs:
           python build_ashare_parquet.py
         fi
 
+    - name: Build Macro Data Lake
+      run: |
+        python build_macro_parquet.py
+
+    - name: Train Production XGBoost Model
+      run: |
+        python train_prod_model.py
+
     - name: Upload Parquet Artifact
       uses: actions/upload-artifact@v4
       with:
         name: ashare-daily-parquet
         path: .quantbot_data/ashare_daily.parquet
         retention-days: 7
+
+    - name: Upload Model Artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: prod-xgb-model
+        path: |
+          .quantbot_data/prod_xgb_model.json
+          .quantbot_data/prod_xgb_meta.json
+        retention-days: 14
