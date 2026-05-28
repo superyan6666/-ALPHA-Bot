@@ -748,11 +748,12 @@ class DataProxy:
         # 腾讯缺少市值信息，用 tushare fundamentals 补全
         funds_df = self._get_tushare_fundamentals_df()
         if not funds_df.empty:
-            df = pd.merge(df, funds_df, on=C.S_CODE, how='left')
+            df = df.set_index(C.S_CODE).combine_first(funds_df.set_index(C.S_CODE)).reset_index()
             df[C.S_MCAP] = df[C.S_MCAP].fillna(100e8)
             log.info("💎 已通过 Tushare 成功向量化补全腾讯备用源缺失的市值数据。")
         else:
-            df[C.S_MCAP] = 100e8
+            if C.S_MCAP not in df.columns:
+                df[C.S_MCAP] = 100e8
         return df
 
     def _fetch_spot_netease(self) -> pd.DataFrame:
@@ -802,7 +803,7 @@ class DataProxy:
         
         funds_df = self._get_tushare_fundamentals_df()
         if not funds_df.empty:
-            df = pd.merge(df, funds_df, on=C.S_CODE, how='left')
+            df = df.set_index(C.S_CODE).combine_first(funds_df.set_index(C.S_CODE)).reset_index()
             df[C.S_MCAP] = df[C.S_MCAP].fillna(100e8)
             df[C.S_PE] = df[C.S_PE].fillna(-1.0)
             df[C.S_PB] = df[C.S_PB].fillna(2.0)
