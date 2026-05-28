@@ -4,8 +4,6 @@ on:
   schedule:
     # 提前至北京时间 14:45 触发 (尾盘买入法)，预留 Github Actions 队列排队延迟
     - cron: '45 6 * * 1-5'
-    # 提前至北京时间 09:35 触发 (早盘宏观与主线播报)
-    - cron: '35 1 * * 1-5'
   workflow_dispatch:
     inputs:
       run_mode:
@@ -75,18 +73,13 @@ jobs:
           PYTHONUNBUFFERED: "1"
         run: |
           # 自动分发调度模式
-          if [ "${{ github.event.schedule }}" == "35 1 * * 1-5" ]; then
-            RUN_MODE="morning"
-          elif [ "${{ github.event.schedule }}" == "45 6 * * 1-5" ]; then
+          if [ "${{ github.event.schedule }}" == "45 6 * * 1-5" ]; then
             RUN_MODE="normal"
           fi
 
           if [ "$RUN_MODE" == "test_conn" ]; then
             echo "🔔 检测到测试模式，执行钉钉与飞书连通性测试..."
             python test_spot_sources.py
-            python main.py
-          elif [ "$RUN_MODE" == "morning" ]; then
-            echo "📊 启动早盘宏观与热门主线播报 Agent..."
             python main.py
           elif [ "$RUN_MODE" == "market_only" ]; then
             echo "📊 检测到大盘体检模式，开始扫描宏观资金与情绪指标..."
