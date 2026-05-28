@@ -1837,21 +1837,22 @@ class NotificationGateway:
             if idx < len(chunks) - 1:
                 time.sleep(1)
 
-def send_dingtalk(signals: list[Signal], watchlist: list, total_pool: int, total_market: int, market_msg: str) -> None:
+def send_dingtalk(signals: dict[str, list[Signal]], watchlist: list, total_pool: int, total_market: int, market_msg: str) -> None:
     now_ts = datetime.now(TZ_BJS)
     now_str = now_ts.strftime('%Y-%m-%d %H:%M')
     run_mode = config.RUN_MODE
     
     header = (
-        f"## 🤖 AI量化保姆级盘后总结\n"
+        f"## 🤖 AI量化保姆级多维选股系统\n"
         f"> **{now_str}**\n>\n"
         f"> ⚠️ **郑重声明**：本报告由量化模型自动生成，仅供技术交流与策略复盘，**绝不构成任何投资建议**。股市有风险，入市需谨慎，盈亏请自负。\n\n"
     )
     if run_mode == 'market_only' or run_mode == 'morning':
         header = f"## 🤖 AI量化大盘深度体检\n> **{now_str}**\n\n"
     elif run_mode not in ('market_only', 'morning') and total_market > 0:
-        pass_rate = len(signals) / max(total_pool, 1) * 100 if total_pool > 0 else 0
-        header += f"**🔬 漏斗数据**：全市场白名单 `{total_market}` 只，异动提取 `{total_pool}` 只，完美过线 `{len(signals)}` 只 (B+级以上优选率 **{pass_rate:.1f}%**)\n\n"
+        total_signals = sum(len(sigs) for sigs in signals.values()) if isinstance(signals, dict) else len(signals)
+        pass_rate = total_signals / max(total_pool, 1) * 100 if total_pool > 0 else 0
+        header += f"**🔬 漏斗数据**：全市场白名单 `{total_market}` 只，异动提取 `{total_pool}` 只，完美过线 `{total_signals}` 只 (优选率 **{pass_rate:.1f}%**)\n\n"
         
     if market_msg:
         header += f"{market_msg}\n\n---\n\n"
@@ -1863,21 +1864,14 @@ def send_dingtalk(signals: list[Signal], watchlist: list, total_pool: int, total
         content = header + "✅ 大盘分析播报完毕，本次任务短路了全量个股运算。"
     elif "接口异常" in market_msg or "网络原因失败" in market_msg:
         content = header + "⚠️ 今日部分个股数据扫描因接口受限中断，已为您提供核心大盘分析参考。"
-    elif not signals and not watchlist:
+    elif not any(signals.values()) and not watchlist:
         if not PUSH_EMPTY: return
         content = f"{header}✅ **机器体检结果**：今日未发现形态完全符合安全边际的标的，别乱买，建议**空仓防守**！"
     else:
-        if signals:
-            MAX_DISPLAY = 5
-            display_signals = signals[:MAX_DISPLAY]
-            hidden_count = len(signals) - len(display_signals)
-            
-            avg_score = sum(s.score for s in display_signals) / len(display_signals)
-            quality_tag = "🥇 **绝佳** (建议严格按剧本执行)" if avg_score >= 80 \
-                else "🥈 **尚可** (建议严格限价，减半仓位)"
-                
-            content = header + f"### 📈 今日核心精选 (Top 5)\n**精选均分：{avg_score:.0f} 分** | {quality_tag}\n\n"
-            
+        content = header
+        has_any_signal = any(signals.values())
+        
+        if has_any_signal:
             cold_gate = (
                 "> **🛑 买入前冷静自检（30秒）**\n"
                 "> 1. 这笔闲钱 **3年内** 绝对不会急用？\n"
@@ -1890,8 +1884,7 @@ def send_dingtalk(signals: list[Signal], watchlist: list, total_pool: int, total
             )
             content += cold_gate
             
-            parts = []
-            for s in display_signals:
+            def format_signal(s):
                 warn_msg = "> ⚡ **【风险警示】** 该股为创业板(波动±20%)，心脏不好请务必**缩减仓位**！\n\n" if str(s.code).startswith('300') else ""
                 prefix = '1' if str(s.code).startswith('6') else '0'
                 tdx_market = 'SH' if str(s.code).startswith('6') else 'SZ' 
@@ -1899,14 +1892,12 @@ def send_dingtalk(signals: list[Signal], watchlist: list, total_pool: int, total
                 sina_market = 'sh' if str(s.code).startswith('6') else 'sz'
                 code_str = str(s.code)
                 
-                # [性能优化] 彻底消除同步网络检测 (requests.head) 带来的延迟雪崩
-                # 根据号段硬编码直接拦截无法生成周线图的边缘板块
                 if code_str.startswith(('8', '4', '9')):
                     kline_url = "https://dummyimage.com/800x400/f3f4f6/9ca3af.png&text=No+Chart+Available"
                 else:
                     kline_url = f"http://image.sinajs.cn/newchart/weekly/n/{sina_market}{s.code}.gif"
                 
-                parts.append(
+                return (
                     f"#### 🎯 {s.name} (`{s.code}`)\n"
                     f"{warn_msg}"
                     f"- **综合评级**：`{s.score}` 分 {s.level}\n"
@@ -1923,16 +1914,32 @@ def send_dingtalk(signals: list[Signal], watchlist: list, total_pool: int, total
                     f"> 🎯 **动态止盈 (吊灯)**：创出新高后，以最高价回撤 2.5~3 倍 ATR 为动态离场线，彻底废除均线退出法。\n"
                     f"> 🚫 **防空防守**：明日开盘直接高开 **> 4%** 说明资金抢跑，直接放弃，绝不追高！\n\n"
                     f"[🔗 点击跳转东方财富 App 查阅详情](https://quote.eastmoney.com/unify/r/{prefix}.{s.code})\n\n"
-                    f"*📌 通达信看盘助手：复制代码 `{s.code}` 后打开通达信 App 即可弹出*"
+                    f"*📌 通达信看盘助手：复制代码 `{s.code}` 后打开通达信 App 即可*"
                 )
-            content += "\n\n---\n\n".join(parts)
-            
-            if hidden_count > 0:
-                hidden_names = "、".join([f"{s.name}(`{s.code}` **{s.score}分**)" for s in signals[MAX_DISPLAY:]])
-                content += f"\n\n---\n*⚠️ 受限于篇幅，以下 **{hidden_count} 只** 达标个股被系统折叠（已按分数排序）：*\n> {hidden_names}"
+
+            # --- Formatting Sections ---
+            if signals.get('Resonance'):
+                content += "### 🔥 今日最强信号：多周期共振\n\n"
+                parts = [format_signal(s) for s in signals['Resonance']]
+                content += "\n\n---\n\n".join(parts) + "\n\n---\n\n"
+                
+            if signals.get('T+1'):
+                content += "### ⚡ T+1 极短线突击 (预期持有1天)\n\n"
+                parts = [format_signal(s) for s in signals['T+1']]
+                content += "\n\n---\n\n".join(parts) + "\n\n---\n\n"
+                
+            if signals.get('T+5'):
+                content += "### 🌊 T+5 周频波段 (预期持有1周)\n\n"
+                parts = [format_signal(s) for s in signals['T+5']]
+                content += "\n\n---\n\n".join(parts) + "\n\n---\n\n"
+                
+            if signals.get('T+10'):
+                content += "### ⛰️ T+10 半月趋势 (预期持有半月)\n\n"
+                parts = [format_signal(s) for s in signals['T+10']]
+                content += "\n\n---\n\n".join(parts) + "\n\n---\n\n"
                 
         else:
-            content = header + "✅ 今日未发现 B+ 级以上核心机会，正式推荐列表空仓防守中。\n"
+            content += "✅ 今日未发现 B+ 级以上核心机会，正式推荐列表空仓防守中。\n"
 
         if watchlist:
             watch_lines = "\n".join(
@@ -1940,7 +1947,7 @@ def send_dingtalk(signals: list[Signal], watchlist: list, total_pool: int, total
                 for name, code, score, price in watchlist[:5]
             )
             content += (
-                f"\n\n---\n### 👁️ 候补观察池（只看不买）\n"
+                f"### 👁️ 候补观察池（只看不买）\n"
                 f"{watch_lines}\n\n"
                 f"*注：以上标的评级不足 70 分，系统判断波动或风险偏大，暂不提供操作剧本。待其评级升至发车线后再考虑介入。*"
             )
@@ -2098,98 +2105,145 @@ def get_signals() -> tuple[list[Signal], list, set, int, str, int]:
     # Extract today's cross section
     today_str = now.strftime('%Y-%m-%d')
     today_panel = panel[panel['date'] == pd.to_datetime(today_str)].copy()
+    # Load Models and Predict
+    h_params = [(1, 5), (5, 3), (10, 2)]
+    horizon_results = {}
     
-    # Load Model
-    model_path = '.quantbot_data/prod_xgb_model.json'
-    if not os.path.exists(model_path):
-        log.critical("🚨 致命错误：XGBoost模型文件缺失，系统终止！")
-        raise FileNotFoundError(f"Missing model file: {model_path} (Rule B3.6 Crash)")
+    for h, top_k in h_params:
+        model_path = f'.quantbot_data/prod_xgb_model_t{h}.json'
+        if not os.path.exists(model_path):
+            log.warning(f"⚠️ 找不到 T+{h} 模型: {model_path}，跳过此周期的选股。")
+            horizon_results[f'T+{h}'] = []
+            continue
+            
+        ltr = XGBoostLTR()
+        ltr.load_model(model_path)
         
-    ltr = XGBoostLTR()
-    ltr.load_model(model_path)
-    
-    if feature_success:
-        xgb_preds = ltr.predict(today_panel, feature_cols)
-        if np.isnan(xgb_preds).all():
-            log.critical("🚨 致命错误：XGBoost输出全部NaN，模型逻辑失效！")
-            raise ValueError("XGBoost output all NaNs (Rule B3.6 Crash)")
-        today_panel['xgb_score'] = xgb_preds
-    else:
-        today_panel['xgb_score'] = 0.5
-        
-    # Sort and Filter Top 5
-    candidates = today_panel.sort_values('xgb_score', ascending=False)
-    candidates = candidates[candidates['xgb_score'] >= 0.5]  # Dynamic threshold
-    
-    for _, ml_row in candidates.iterrows():
-        code = ml_row['code']
-        if code not in stock_infos: continue
-        info = stock_infos[code]
-        row, data, stop = info['row'], info['data'], info['stop']
-        
-        # Approximate scaling for UI score consistency
-        score = float(ml_row['xgb_score']) * 100 
-        level = "⚡ AI选股"
-        reas = [f"XGB_Score:{ml_row['xgb_score']:.3f}"]
-        
-        target1_price = calc_target_price(row[C.S_PRICE], stop, data)
-        money_msg = format_money_risk_msg(row[C.S_PRICE], stop, target1_price)
-        tranche_msg = generate_tranche_plan(row[C.S_PRICE], score, m_ok, m_overheated)
-        plan_b_msg = generate_plan_b(row[C.S_PRICE], stop, data['ma20_val'])
-        hold_msg = generate_hold_period(data['adx'], data['price_pct'], data['has_chip_break'])
-        
-        confirmed_data.append(Signal(
-            code=row[C.S_CODE], name=row[C.S_NAME], price=row[C.S_PRICE],
-            pct_chg=f"{row[C.S_PCT]}%", score=score, level=level,
-            trigger_time=now.strftime('%H:%M'), reasons=reas,
-            stop_loss=round(stop, 2), target1=target1_price,
-            ma10=round(data['ma10_val'], 2),
-            money_risk_msg=money_msg, tranche_plan_msg=tranche_msg,
-            plan_b_msg=plan_b_msg, hold_period_msg=hold_msg
-        ))
-
-
-    confirmed_data.sort(key=lambda x: (x.score, x.code), reverse=True)
-    
-    # ── 【核心优化落地：简单组合控制 (Max 2 Per Sector)】 ──
-    final_confirmed = []
-    sector_counts = {}
-    for s in confirmed_data:
-        sector = hot_sectors_map.get(s.code)
-        if sector:
-            # 如果该板块已有 2 只上榜，直接拦截（防止同板块集中爆破）
-            if sector_counts.get(sector, 0) >= 2:
+        if feature_success:
+            xgb_preds = ltr.predict(today_panel, feature_cols)
+            if np.isnan(xgb_preds).all():
+                log.critical(f"🚨 致命错误：T+{h} XGBoost输出全部NaN！")
+                horizon_results[f'T+{h}'] = []
                 continue
-            sector_counts[sector] = sector_counts.get(sector, 0) + 1
-        final_confirmed.append(s)
+            today_panel[f'xgb_score_t{h}'] = xgb_preds
+        else:
+            today_panel[f'xgb_score_t{h}'] = 0.5
+            
+        candidates = today_panel.sort_values(f'xgb_score_t{h}', ascending=False)
+        candidates = candidates[candidates[f'xgb_score_t{h}'] >= 0.5]
         
+        h_signals = []
+        for _, ml_row in candidates.iterrows():
+            code = ml_row['code']
+            if code not in stock_infos: continue
+            info = stock_infos[code]
+            row, data, stop = info['row'], info['data'], info['stop']
+            
+            score = float(ml_row[f'xgb_score_t{h}']) * 100 
+            level = f"⚡ T+{h} AI选股"
+            reas = [f"XGB_Score_T{h}:{ml_row[f'xgb_score_t{h}']:.3f}"]
+            
+            target1_price = calc_target_price(row[C.S_PRICE], stop, data)
+            money_msg = format_money_risk_msg(row[C.S_PRICE], stop, target1_price)
+            tranche_msg = generate_tranche_plan(row[C.S_PRICE], score, m_ok, m_overheated)
+            plan_b_msg = generate_plan_b(row[C.S_PRICE], stop, data['ma20_val'])
+            
+            if h == 1:
+                hold_msg = generate_hold_period(data['adx'], data['price_pct'], data['has_chip_break'])
+            elif h == 5:
+                hold_msg = "> ⏳ **持仓周期 (T+5 波段)**：预期持有 1 周。只要未跌破防守线，忽略日内波动。"
+            else:
+                hold_msg = "> ⏳ **持仓周期 (T+10 趋势)**：预期持有半个月。这是长线信号，重质不重量，适合底仓持有。"
+            
+            sig = Signal(
+                code=row[C.S_CODE], name=row[C.S_NAME], price=row[C.S_PRICE],
+                pct_chg=f"{row[C.S_PCT]}%", score=score, level=level,
+                trigger_time=now.strftime('%H:%M'), reasons=reas,
+                stop_loss=round(stop, 2), target1=target1_price,
+                ma10=round(data['ma10_val'], 2),
+                money_risk_msg=money_msg, tranche_plan_msg=tranche_msg,
+                plan_b_msg=plan_b_msg, hold_period_msg=hold_msg
+            )
+            h_signals.append(sig)
+            
+        h_signals.sort(key=lambda x: (x.score, x.code), reverse=True)
+        
+        # Sector limits for this horizon
+        final_h = []
+        sector_counts = {}
+        for s in h_signals:
+            sector = hot_sectors_map.get(s.code)
+            if sector:
+                if sector_counts.get(sector, 0) >= 2:
+                    continue
+                sector_counts[sector] = sector_counts.get(sector, 0) + 1
+            final_h.append(s)
+            
+        horizon_results[f'T+{h}'] = final_h[:top_k]
+        
+    # Process Resonance (共振)
+    code_horizons = {}
+    for h_name, sigs in horizon_results.items():
+        for s in sigs:
+            if s.code not in code_horizons:
+                code_horizons[s.code] = []
+            code_horizons[s.code].append(h_name)
+            
+    resonance_signals = []
+    final_horizon_results = {'T+1': [], 'T+5': [], 'T+10': []}
+    
+    code_to_sig = {}
+    for sigs in horizon_results.values():
+        for s in sigs:
+            if s.code not in code_to_sig or s.score > code_to_sig[s.code].score:
+                code_to_sig[s.code] = s
+            
+    for code, h_list in code_horizons.items():
+        sig = code_to_sig[code]
+        if len(h_list) > 1:
+            sig.level = f"🔥 多周期共振 ({', '.join(h_list)})"
+            resonance_signals.append(sig)
+        else:
+            h_name = h_list[0]
+            final_horizon_results[h_name].append(sig)
+            
+    resonance_signals.sort(key=lambda x: (x.score, x.code), reverse=True)
+    
+    confirmed_data_dict = {
+        'Resonance': resonance_signals,
+        'T+1': final_horizon_results['T+1'],
+        'T+5': final_horizon_results['T+5'],
+        'T+10': final_horizon_results['T+10']
+    }
+    
     watchlist_data.sort(key=lambda x: (x[2], x[1]), reverse=True) 
     
     today_str = _today_str()
-    # 仅将决选且展出给用户的 Top 10 个股记录进状态锁与模拟盘账本
-    for s in final_confirmed[:10]:
-        cd_days = 1 if s.score >= 85 else 3
-        expire_dt = now + timedelta(days=cd_days)
-        pushed[s.code] = expire_dt.strftime('%Y-%m-%d')
-        
-        # 避免一天多次手工运行产生重复的 PENDING 记录，污染账本
-        if any(t.get('code') == s.code and t.get('date') == today_str and t.get('status') == 'PENDING' for t in paper_trades):
-            continue
+    # 仅将决选且展出给用户的个股记录进状态锁与模拟盘账本
+    for group in confirmed_data_dict.values():
+        for s in group:
+            cd_days = 1 if s.score >= 85 else 3
+            expire_dt = now + timedelta(days=cd_days)
+            pushed[s.code] = expire_dt.strftime('%Y-%m-%d')
             
-        paper_trades.append({
-            'date': today_str,
-            'code': s.code,
-            'score_bucket': get_score_bucket(s.score),
-            'buy_price': s.price,
-            'target': s.target1,
-            'stop': s.stop_loss,
-            'status': 'PENDING',
-            'triggered_factors': s.reasons
-        })
+            # 避免一天多次手工运行产生重复的 PENDING 记录，污染账本
+            if any(t.get('code') == s.code and t.get('date') == today_str and t.get('status') == 'PENDING' for t in paper_trades):
+                continue
+                
+            paper_trades.append({
+                'date': today_str,
+                'code': s.code,
+                'score_bucket': get_score_bucket(s.score),
+                'buy_price': s.price,
+                'target': s.target1,
+                'stop': s.stop_loss,
+                'status': 'PENDING',
+                'triggered_factors': s.reasons
+            })
     
     save_paper_trades(paper_trades)
 
-    return final_confirmed, watchlist_data, pushed, len(pool), m_msg, len(df_clean)
+    return confirmed_data_dict, watchlist_data, pushed, len(pool), m_msg, len(df_clean)
 
 
 if __name__ == '__main__':
@@ -2208,7 +2262,7 @@ if __name__ == '__main__':
         else:
             sigs, watch, pushed, pool_size, m_msg, total_mkt = get_signals()
             send_dingtalk(sigs, watch, pool_size, total_mkt, m_msg)
-            if sigs: save_pushed_state(pushed)
+            if any(sigs.values()): save_pushed_state(pushed)
             
     except Exception as e:
         log.critical(f"系统崩溃: {e}", exc_info=True)

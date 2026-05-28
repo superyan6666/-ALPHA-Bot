@@ -58,6 +58,6 @@ jobs:
       with:
         name: prod-xgb-model
         path: |
-          .quantbot_data/prod_xgb_model.json
-          .quantbot_data/prod_xgb_meta.json
+          .quantbot_data/prod_xgb_model_*.json
+          .quantbot_data/prod_xgb_meta_*.json
         retention-days: 14
