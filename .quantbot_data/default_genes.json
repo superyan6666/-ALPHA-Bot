@@ -1,0 +1,49 @@
+{
+    "version": "2.0",
+    "locked_date": "2026-05-29",
+    "locked_by": "CRUCIBLE Optimization Sweep v2",
+    "baseline_sharpe": 1.83,
+    "baseline_spread_bps": 6.71,
+    "baseline_maxdd": -0.224,
+    "bh_benchmark": {
+        "cagr": 0.2797,
+        "sharpe": 1.17,
+        "maxdd": -0.26
+    },
+    "features": [
+        "clv",
+        "volatility_5d",
+        "alpha_reversal_5d",
+        "alpha_024_approx",
+        "market_ret_20d",
+        "market_ret_60d",
+        "market_vol_20d",
+        "macro_staleness_days"
+    ],
+    "rejected_features": {
+        "cn_10y_trend": "OOS Sharpe -1.12, severe overfitting",
+        "us_cn_spread": "OOS Sharpe -0.15, noise > signal",
+        "us_yield_curve_spread": "OOS Sharpe 0.72, marginal drag",
+        "us_yield_curve_inversion": "OOS Sharpe 0.72, marginal drag"
+    },
+    "model": {
+        "type": "PyTorchDLModel",
+        "architecture": "Linear(N,64)->BN->ReLU->Drop(0.2)->Linear(64,32)->BN->ReLU->Linear(32,1)",
+        "epochs": 5,
+        "learning_rate": 0.0003,
+        "batch_size": 2048
+    },
+    "optimization_log": [
+        {"config": "ep5_lr0.0003", "sharpe": 1.83, "spread_bps": 6.71, "maxdd": -0.224},
+        {"config": "ep5_lr0.001",  "sharpe": 0.93, "spread_bps": 3.61, "maxdd": -0.262},
+        {"config": "ep5_lr0.003",  "sharpe": 0.30, "spread_bps": 1.30, "maxdd": -0.282},
+        {"config": "ep10_lr0.0003","sharpe": 1.05, "spread_bps": 3.78, "maxdd": -0.262},
+        {"config": "ep10_lr0.001", "sharpe": -0.50,"spread_bps": -2.39,"maxdd": -0.293},
+        {"config": "ep10_lr0.003", "sharpe": 0.18, "spread_bps": 0.98, "maxdd": -0.299},
+        {"config": "ep15_lr0.0003","sharpe": -0.80,"spread_bps": -3.26,"maxdd": -0.293},
+        {"config": "ep15_lr0.001", "sharpe": null, "note": "early-stopped: monotonic degradation"},
+        {"config": "ep15_lr0.003", "sharpe": null, "note": "early-stopped: monotonic degradation"}
+    ],
+    "trials_used": 12,
+    "trials_budget": 30
+}

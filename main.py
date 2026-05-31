@@ -15,7 +15,7 @@ import numpy as np
 import pandas as pd
 
 import traceback
-from ml_engine import XGBoostLTR
+from ml_engine import PyTorchDLModel
 from feature_engine import build_ml_features
 import os
 
@@ -102,7 +102,7 @@ TZ_BJS       = pytz.timezone('Asia/Shanghai')
 STATE_FILE   = 'pushed_state.json'
 SPOT_CACHE   = 'spot_cache.pkl'
 HIST_CACHE_DIR = 'hist_cache'
-PAPER_TRADES_FILE = 'paper_trades.json' 
+
 
 IS_MANUAL    = config.IS_MANUAL
 PUSH_EMPTY   = config.PUSH_EMPTY
@@ -203,86 +203,6 @@ def is_recently_pushed(code: str, pushed: dict) -> bool:
         return today_date < expire_date
     except Exception:
         return False
-
-def load_and_update_paper_trades(df_spot: pd.DataFrame) -> tuple[list, dict]:
-    trades = []
-    if os.path.exists(PAPER_TRADES_FILE):
-        try:
-            with open(PAPER_TRADES_FILE, 'r') as f:
-                trades = json.load(f)
-        except Exception: pass
-
-    spot_dict = df_spot.set_index(Cols.S_CODE).to_dict('index')
-    
-    stats = {
-        '85-100': {'win': 0, 'total': 0}, '80-85': {'win': 0, 'total': 0},
-        '75-80': {'win': 0, 'total': 0}, '70-75': {'win': 0, 'total': 0}, '<70': {'win': 0, 'total': 0}
-    }
-
-    active_trades = []
-    today_date = datetime.now(TZ_BJS).date()
-    AI_EVO_LOOKBACK_DAYS = 60 # 限定自进化回溯窗口，防止老旧策略权重固化
-    
-    for t in trades:
-        status = t.get('status', 'PENDING')
-        code = t.get('code')
-        buy_date = datetime.strptime(t['date'], '%Y-%m-%d').date()
-        days_since_buy = (today_date - buy_date).days
-        
-        # 丢弃超过 90 天的已完结历史记录，避免文件膨胀
-        if days_since_buy > 90 and status != 'PENDING':
-            continue
-        # [防爆雷] PENDING 状态长期未触发可能存在停牌等异常，超过 120 天强制过期丢弃
-        if days_since_buy > 120 and status == 'PENDING':
-            continue
-        
-        if status == 'PENDING' and code in spot_dict:
-            row = spot_dict[code]
-            high = float(row.get(Cols.S_HIGH, 0))
-            low = float(row.get(Cols.S_LOW, 0))
-            close = float(row.get(Cols.S_PRICE, 0))
-
-            # 对齐回测架构 Phase 1: T+5 时间锁 (按自然日约 7 天估算)
-            is_locked = days_since_buy < 7
-            
-            if low <= t['stop']:
-                t['status'] = 'LOSS' # 硬止损拥有系统最高优先级，无视时间锁
-            elif not is_locked and high >= t['target']:
-                t['status'] = 'WIN'
-            elif not is_locked and days_since_buy > 14:  
-                # 震荡市超过14个自然日(约10个交易日)未达标，判为 TIME_EXIT 丢弃，不计入胜率统计
-                t['status'] = 'TIME_EXIT'
-
-        if t['status'] in ('WIN', 'LOSS'):
-            # 仅统计近期的交易用于自进化打分，防止前视偏差和过时信息影响
-            if days_since_buy <= AI_EVO_LOOKBACK_DAYS:
-                bucket = t.get('score_bucket', '<70')
-                if bucket in stats:
-                    stats[bucket]['total'] += 1
-                    if t['status'] == 'WIN':
-                        stats[bucket]['win'] += 1
-
-        active_trades.append(t)
-
-    # [关键修复] 强制将内存中更新后的状态同步持久化回磁盘，防止因 get_signals 提前 return 而丢失历史 trade 状态更新
-    save_paper_trades(active_trades)
-
-    return active_trades, stats
-
-def save_paper_trades(trades: list):
-    try:
-        with open(PAPER_TRADES_FILE, 'w') as f:
-            json.dump(trades, f)
-    except Exception as e:
-        log.error(f"保存模拟盘账本失败: {e}")
-
-def get_score_bucket(score: float) -> str:
-    if score >= 85: return '85-100'
-    if score >= 80: return '80-85'
-    if score >= 75: return '75-80'
-    if score >= 70: return '70-75'
-    return '<70'
-
 
 # ═════════════════════════════════════════════════════════════════════════════
 # 3. 数据契约模型 (Data Schema & Models)
@@ -448,15 +368,15 @@ def format_money_risk_msg(price: float, stop_loss: float, target1: float) -> str
         evaluation = "⚠️ **需谨慎**：操作要求高，务必**减半仓位**！"
     
     return (
-        f"- 💸 **仓位测算**：买 {hands} 手约需 `¥{total_cost:.0f}` (按1万预算计)\n"
-        f"- 🔴 **止损风险**：预估最大回撤约 `-¥{total_loss:.0f}`\n"
-        f"- 🟢 **止盈目标**：第一波段预估盈利 `+¥{gain_1:.0f}`\n"
-        f"- 📐 **盈亏比**：`1 : {ratio_str}` ➡️ {evaluation}"
+        f"- 💸 **建仓成本参考**：若买 {hands} 手约需资金占用 `¥{total_cost:.0f}` (按1万预算计)\n"
+        f"- 🔴 **下行风险参考**：至止损位的最大回撤预估约 `-¥{total_loss:.0f}`\n"
+        f"- 🟢 **上行空间参考**：第一波段预期获利 `+¥{gain_1:.0f}`\n"
+        f"- 📐 **理论盈亏比**：`1 : {ratio_str}` ➡️ {evaluation}"
     )
 
 def generate_tranche_plan(price: float, score: int, market_ok: bool, market_overheated: bool) -> str:
     if market_overheated:
-        return "🛑 **【系统熔断】当前市场情绪极度过热！随时面临收割踩踏，系统强制禁止明日建仓！**"
+        return "🛑 **【市场情绪警报】当前大盘极度过热！随时可能面临获利盘踩踏，强烈建议暂停买入或保持空仓观望！**"
         
     base_pct = 30 if score >= 85 else 20 if score >= 70 else 10
     if not market_ok:
@@ -472,9 +392,9 @@ def generate_tranche_plan(price: float, score: int, market_ok: bool, market_over
     stop_add    = round(price * 1.05,  2)
     
     return (
-        f"- **① 关注支撑**：次日重点观察 `¥{lower_bound} - ¥{upper_bound}` 区间，若缩量企稳可分批 **{t1}%** 试错。\n"
-        f"- **② 稳健加仓**：若后续确认上攻站稳 `¥{add_price}`，可适当加仓 **{t2}%**。\n"
-        f"- **③ 追击确认**：突破形态上沿 `¥{stop_add}`，最后追加确认仓位 **{t3}%**。"
+        f"- **① 关注支撑**：次日重点观察 `¥{lower_bound} - ¥{upper_bound}` 区间，若决定建仓可考虑分配 **{t1}%** 仓位试错。\n"
+        f"- **② 稳健加仓**：若后续确认上攻站稳 `¥{add_price}`，可考虑增加 **{t2}%** 配置。\n"
+        f"- **③ 趋势跟随**：若突破形态上沿 `¥{stop_add}`，建议保留 **{t3}%** 资金应对或做跟随确认。"
     )
 
 def generate_plan_b(price: float, stop_loss: float, ma20: float) -> str:
@@ -483,17 +403,17 @@ def generate_plan_b(price: float, stop_loss: float, ma20: float) -> str:
     
     return (
         f"- **📉 正常波动**：只要收盘未破 `¥{normal_shake:.2f}`，属于正常洗盘震荡。\n"
-        f"- **🔪 铁血防线**：有效跌破 `¥{stop_loss:.2f}`，说明逻辑证伪，**必须无条件执行止损！**\n"
-        f"- **💥 系统风险**：若遇大盘单日非理性暴跌，优先保住本金安全。"
+        f"- **🔪 防守红线**：一旦有效跌破 `¥{stop_loss:.2f}`，说明上涨逻辑可能证伪，**强烈建议执行止损保护本金！**\n"
+        f"- **💥 系统风险**：若遇大盘单日非理性暴跌，请优先考虑系统性风险规避。"
     )
 
 def generate_hold_period(adx: float, price_pct: float, has_chip_break: bool) -> str:
     if price_pct < 0.35 and adx < 20:
-        return "- **⏳ 持股预期**：🐢 **【底部潜伏型】(1~3个月)**，存死期别盯盘。"
+        return "- **⏳ 持股参考**：🐢 **【底部潜伏型】(1~3个月)**，属于左侧蓄势，建议保持耐心不宜频繁操作。"
     elif adx > 25 or has_chip_break:
-        return "- **⏳ 持股预期**：🐎 **【右侧趋势型】(3~10天)**，随时加速，切忌贪心。"
+        return "- **⏳ 持股参考**：🐎 **【右侧趋势型】(3~10天)**，当前正处爆发期，建议见好就收，避免过度贪婪。"
     else:
-        return "- **⏳ 持股预期**：🐕 **【稳健震荡型】(2~4周)**，需要耐心等风来。"
+        return "- **⏳ 持股参考**：🐕 **【稳健震荡型】(2~4周)**，建议等待趋势明朗。"
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -854,30 +774,47 @@ class DataProxy:
 
     def get_spot(self) -> pd.DataFrame:
         df = self._fetch_spot_qmt()
-        if df is not None: return df
+        if df is None: df = self._fetch_spot_efinance()
         
-        df = self._fetch_spot_efinance()
-        if df is not None: return df
-        
-        try:
-            df = self._fetch_spot_akshare()
-            if df is not None: return df
-        except Exception as e:
-            log.debug(f"akshare spot failed: {e}")
-            
-        try:
-            df = self._fetch_spot_tencent()
-            if df is not None: return df
-        except Exception as e:
-            log.debug(f"tencent spot failed: {e}")
-            
-        try:
-            df = self._fetch_spot_netease()
-            if df is not None: return df
-        except Exception as e:
-            log.debug(f"netease spot failed: {e}")
-            
-        return self._fetch_spot_tushare_fallback()
+        if df is None:
+            try:
+                df = self._fetch_spot_akshare()
+            except Exception as e:
+                log.debug(f"akshare spot failed: {e}")
+                
+        if df is None:
+            try:
+                df = self._fetch_spot_tencent()
+            except Exception as e:
+                log.debug(f"tencent spot failed: {e}")
+                
+        if df is None:
+            try:
+                df = self._fetch_spot_netease()
+            except Exception as e:
+                log.debug(f"netease spot failed: {e}")
+                
+        if df is None:
+            df = self._fetch_spot_tushare_fallback()
+
+        if df is not None and not df.empty:
+            col_map = {}
+            for c in df.columns:
+                if c in ['股票代码', 'code', 'ts_code', 'symbol', 'f12']: col_map[c] = C.S_CODE
+                if c in ['股票名称', 'name', 'f14']: col_map[c] = C.S_NAME
+            if col_map:
+                df = df.rename(columns=col_map)
+                
+            if C.S_CODE in df.columns:
+                df[C.S_CODE] = df[C.S_CODE].astype(str).str.zfill(6)
+                df = df.drop_duplicates(subset=[C.S_CODE], keep='first')
+                
+            # 全局兜底强制填补缺失的财务列，防止下游 KeyError
+            fallback_defaults = {C.S_MCAP: 100e8, C.S_PE: -1.0, C.S_PB: 2.0, C.S_VR: 1.0, C.S_TURN: 2.0, C.S_PCT: 0.0, C.S_PRICE: 0.0}
+            for col, val in fallback_defaults.items():
+                if col not in df.columns:
+                    df[col] = val
+        return df
 
     # ---- [3. Index & Context] ----
     @retry(times=4, delay=2)
@@ -1873,13 +1810,13 @@ def send_dingtalk(signals: dict[str, list[Signal]], watchlist: list, total_pool:
         
         if has_any_signal:
             cold_gate = (
-                "> **🛑 买入前冷静自检（30秒）**\n"
-                "> 1. 这笔闲钱 **3年内** 绝对不会急用？\n"
-                "> 2. 就算不小心 **亏掉30%** 也不会睡不着？\n"
-                "> 3. 能管住手，**绝不因为下跌反复盯盘**？\n"
+                "> **🛑 投资前冷静自检（30秒）**\n"
+                "> 1. 这笔资金在 **3年内** 绝对不会急用？\n"
+                "> 2. 就算触发极值回撤 **亏掉30%** 也不会影响生活？\n"
+                "> 3. 能否严格遵守纪律，**不因短期下跌而恐慌操作**？\n"
                 "> \n"
-                "> *✅ 三项全对 ➡️ 允许按下方计划执行*\n"
-                "> *❌ 有一项不对 ➡️ 请立即把买入预算砍掉一半！*\n\n"
+                "> *✅ 三项全对 ➡️ 可参考下方模型生成的信号*\n"
+                "> *❌ 有一项不对 ➡️ 强烈建议大幅缩减投入预算或保持空仓！*\n\n"
                 "---\n\n"
             )
             content += cold_gate
@@ -1909,10 +1846,10 @@ def send_dingtalk(signals: dict[str, list[Signal]], watchlist: list, total_pool:
                     f"{s.money_risk_msg}\n\n"
                     f"{s.tranche_plan_msg}\n\n"
                     f"{s.plan_b_msg}\n\n"
-                    f"> **纪律红线 (V11.0 吊灯止损架构)**\n"
-                    f"> 🛡️ **防震仓锁 (T+5)**：建仓后 5 个交易日内，只要未跌破死线 `¥{s.stop_loss}`，无论怎么洗盘坚决死拿！\n"
-                    f"> 🎯 **动态止盈 (吊灯)**：创出新高后，以最高价回撤 2.5~3 倍 ATR 为动态离场线，彻底废除均线退出法。\n"
-                    f"> 🚫 **防空防守**：明日开盘直接高开 **> 4%** 说明资金抢跑，直接放弃，绝不追高！\n\n"
+                    f"> **风控与操作参考 (V11.0 吊灯模型)**\n"
+                    f"> 🛡️ **防震仓锁 (T+5)**：若建仓，前 5 个交易日内未跌破防守线 `¥{s.stop_loss}` 时，通常属于正常洗盘震荡。\n"
+                    f"> 🎯 **动态止盈参考**：若创出新高，可考虑以最高价回撤 2.5~3 倍 ATR 作为动态离场线参考。\n"
+                    f"> 🚫 **追高风险**：若明日开盘直接高开 **> 4%**，说明资金抢跑，追高风险较大，建议放弃。\n\n"
                     f"[🔗 点击跳转东方财富 App 查阅详情](https://quote.eastmoney.com/unify/r/{prefix}.{s.code})\n\n"
                     f"*📌 通达信看盘助手：复制代码 `{s.code}` 后打开通达信 App 即可*"
                 )
@@ -1985,7 +1922,7 @@ def get_signals() -> tuple[list[Signal], list, set, int, str, int]:
         log.info(f"🤖 [{config.RUN_MODE}模式] 完毕，退出个股运算。")
         return [], [], pushed, 0, m_msg, len(df_raw)
 
-    paper_trades, win_stats = load_and_update_paper_trades(df_raw)
+
     hot_sectors_map = fetch_hot_sectors()
 
     if df_clean.empty:
@@ -2093,8 +2030,10 @@ def get_signals() -> tuple[list[Signal], list, set, int, str, int]:
     
     try:
         panel = build_ml_features(panel)
-        feature_cols = ['sm_corr', 'clv', 'volatility_5d', 'vol_ratio', 'alpha_reversal_5d', 'alpha_024_approx',
-                        'market_ret_20d', 'market_ret_60d', 'market_vol_20d', 'cn_10y_trend']
+        import json
+        with open('.quantbot_data/default_genes.json') as f:
+            genes = json.load(f)
+        feature_cols = genes['features']
         feature_success = True
     except Exception as e:
         log.error(f"🚨 ML Feature Computation Failed: {e}")
@@ -2110,19 +2049,21 @@ def get_signals() -> tuple[list[Signal], list, set, int, str, int]:
     horizon_results = {}
     
     for h, top_k in h_params:
-        model_path = f'.quantbot_data/prod_xgb_model_t{h}.json'
+        model_path = f'.quantbot_data/prod_pt_model_t{h}.pth'
         if not os.path.exists(model_path):
             log.warning(f"⚠️ 找不到 T+{h} 模型: {model_path}，跳过此周期的选股。")
             horizon_results[f'T+{h}'] = []
             continue
             
-        ltr = XGBoostLTR()
+        # Initialize PyTorchDLModel with the number of features
+        ltr = PyTorchDLModel(input_dim=len(feature_cols))
         ltr.load_model(model_path)
         
         if feature_success:
+            # Predict using PyTorchDLModel
             xgb_preds = ltr.predict(today_panel, feature_cols)
             if np.isnan(xgb_preds).all():
-                log.critical(f"🚨 致命错误：T+{h} XGBoost输出全部NaN！")
+                log.critical(f"🚨 致命错误：T+{h} DL输出全部NaN！")
                 horizon_results[f'T+{h}'] = []
                 continue
             today_panel[f'xgb_score_t{h}'] = xgb_preds
@@ -2141,7 +2082,16 @@ def get_signals() -> tuple[list[Signal], list, set, int, str, int]:
             
             score = float(ml_row[f'xgb_score_t{h}']) * 100 
             level = f"⚡ T+{h} AI选股"
-            reas = [f"XGB_Score_T{h}:{ml_row[f'xgb_score_t{h}']:.3f}"]
+            
+            # Construct human-readable reasons from ML features
+            reas_list = [f"🏆 **AI 胜率模型 (T+{h}) 打分**: `{score:.2f}`"]
+            if 'alpha_reversal_5d' in ml_row and not pd.isna(ml_row['alpha_reversal_5d']):
+                reas_list.append(f"🔄 **短期反转强度**: `{ml_row['alpha_reversal_5d']:.3f}`")
+            if 'clv' in ml_row and not pd.isna(ml_row['clv']):
+                reas_list.append(f"📌 **收盘价位置分布 (CLV)**: `{ml_row['clv']:.2f}`")
+            if 'volatility_5d' in ml_row and not pd.isna(ml_row['volatility_5d']):
+                reas_list.append(f"📉 **5日波动率**: `{ml_row['volatility_5d']:.2f}%`")
+            reas = "\n".join([f"- {r}" for r in reas_list])
             
             target1_price = calc_target_price(row[C.S_PRICE], stop, data)
             money_msg = format_money_risk_msg(row[C.S_PRICE], stop, target1_price)
@@ -2151,9 +2101,9 @@ def get_signals() -> tuple[list[Signal], list, set, int, str, int]:
             if h == 1:
                 hold_msg = generate_hold_period(data['adx'], data['price_pct'], data['has_chip_break'])
             elif h == 5:
-                hold_msg = "> ⏳ **持仓周期 (T+5 波段)**：预期持有 1 周。只要未跌破防守线，忽略日内波动。"
+                hold_msg = "> ⏳ **建议持仓周期 (T+5 波段)**：预期持有参考约 1 周。只要未跌破防守线，可参考忽略日内波动。"
             else:
-                hold_msg = "> ⏳ **持仓周期 (T+10 趋势)**：预期持有半个月。这是长线信号，重质不重量，适合底仓持有。"
+                hold_msg = "> ⏳ **建议持仓周期 (T+10 趋势)**：预期持有参考约半个月。属于长线信号，适合底仓参考。"
             
             sig = Signal(
                 code=row[C.S_CODE], name=row[C.S_NAME], price=row[C.S_PRICE],
@@ -2225,26 +2175,75 @@ def get_signals() -> tuple[list[Signal], list, set, int, str, int]:
             cd_days = 1 if s.score >= 85 else 3
             expire_dt = now + timedelta(days=cd_days)
             pushed[s.code] = expire_dt.strftime('%Y-%m-%d')
-            
-            # 避免一天多次手工运行产生重复的 PENDING 记录，污染账本
-            if any(t.get('code') == s.code and t.get('date') == today_str and t.get('status') == 'PENDING' for t in paper_trades):
-                continue
-                
-            paper_trades.append({
-                'date': today_str,
-                'code': s.code,
-                'score_bucket': get_score_bucket(s.score),
-                'buy_price': s.price,
-                'target': s.target1,
-                'stop': s.stop_loss,
-                'status': 'PENDING',
-                'triggered_factors': s.reasons
-            })
-    
-    save_paper_trades(paper_trades)
+
 
     return confirmed_data_dict, watchlist_data, pushed, len(pool), m_msg, len(df_clean)
 
+# ═════════════════════════════════════════════════════════════════════════════
+# 7. Crucible Backtest Engine (VectorBT)
+# ═════════════════════════════════════════════════════════════════════════════
+import vectorbt as vbt
+import gc
+
+class CrucibleBacktestEngine:
+    def __init__(self, initial_capital=1000000, max_trials=30):
+        self.initial_capital = initial_capital
+        self.max_trials = max_trials
+        self.trials_run = 0
+        log.info("[CRUCIBLE] Backtest Engine Initialized. Max trials: 30")
+        
+    def run_chunked_backtest(self, panel_path, signal_df, chunk_size_years=5):
+        if self.trials_run >= self.max_trials:
+            log.error("[CRUCIBLE] Trial budget exceeded (30). Forcing stop to prevent overfitting.")
+            return None
+            
+        self.trials_run += 1
+        log.info(f"[CRUCIBLE] Running chunked VectorBT backtest. Trial {self.trials_run}/{self.max_trials}")
+        
+        df = pd.read_parquet(panel_path)
+        df['date'] = pd.to_datetime(df['date'])
+        
+        start_year = df['date'].dt.year.min()
+        end_year = df['date'].dt.year.max()
+        
+        all_portfolios = []
+        for y in range(start_year, end_year + 1, chunk_size_years):
+            chunk = df[(df['date'].dt.year >= y) & (df['date'].dt.year < y + chunk_size_years)].copy()
+            if chunk.empty: continue
+            
+            close = chunk.pivot(index='date', columns='code', values='close').ffill()
+            volume = chunk.pivot(index='date', columns='code', values='vol').fillna(0)
+            
+            chunk_sigs = signal_df[(signal_df['date'].dt.year >= y) & (signal_df['date'].dt.year < y + chunk_size_years)]
+            entries = chunk_sigs[chunk_sigs['xgb_quantile'] == 5].pivot(index='date', columns='code', values='xgb_quantile').notna()
+            exits = chunk_sigs[chunk_sigs['xgb_quantile'] == 1].pivot(index='date', columns='code', values='xgb_quantile').notna()
+            
+            entries = entries.reindex(index=close.index, columns=close.columns, fill_value=False)
+            exits = exits.reindex(index=close.index, columns=close.columns, fill_value=False)
+            
+            # [CRUCIBLE PROTOCOL] Volume Capacity Constraint (Max 10%)
+            max_size = volume * 0.10
+            
+            # [CRUCIBLE PROTOCOL] Dynamic Slippage during crisis
+            slippage = 0.002 # 20 bps base
+            
+            pf = vbt.Portfolio.from_signals(
+                close,
+                entries,
+                exits,
+                size=max_size,
+                size_type='shares',
+                init_cash=self.initial_capital,
+                slippage=slippage,
+                freq='D'
+            )
+            all_portfolios.append(pf)
+            
+            del chunk, close, volume, entries, exits
+            gc.collect()
+            
+        log.info("[CRUCIBLE] Chunked backtest completed.")
+        return all_portfolios
 
 if __name__ == '__main__':
     try:

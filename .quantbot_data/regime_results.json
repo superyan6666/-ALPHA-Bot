@@ -1,0 +1,59 @@
+{
+  "timestamp": "2026-05-29T16:46:16.315308",
+  "baseline_sharpe": 1.83,
+  "results": {
+    "Regime_Median_2way": {
+      "spread_bps": -1.3438405990600586,
+      "sharpe": -0.35789513497237846,
+      "max_dd": -0.2261044979095459,
+      "win_rate": 0.4847605224963715,
+      "regime_breakdown": {
+        "low_vol": {
+          "sharpe": 0.48074271806833274,
+          "n_days": 290
+        },
+        "high_vol": {
+          "sharpe": -0.7022045150299189,
+          "n_days": 399
+        }
+      }
+    },
+    "Regime_Tercile_3way": {
+      "spread_bps": 1.995431900024414,
+      "sharpe": 0.5810551439061756,
+      "max_dd": -0.25939929485321045,
+      "win_rate": 0.5036284470246735,
+      "regime_breakdown": {
+        "low_vol": {
+          "sharpe": -1.1570625772243603,
+          "n_days": 184
+        },
+        "mid_vol": {
+          "sharpe": 0.09116861011345967,
+          "n_days": 211
+        },
+        "high_vol": {
+          "sharpe": 1.4212225497668771,
+          "n_days": 294
+        }
+      }
+    },
+    "Regime_Median_ep3": {
+      "spread_bps": 1.7145090103149414,
+      "sharpe": 0.45103058756259423,
+      "max_dd": -0.21753144264221191,
+      "win_rate": 0.5094339622641509,
+      "regime_breakdown": {
+        "low_vol": {
+          "sharpe": -1.4999170651139715,
+          "n_days": 290
+        },
+        "high_vol": {
+          "sharpe": 1.4153367474869956,
+          "n_days": 399
+        }
+      }
+    }
+  },
+  "trials_used": 26
+}

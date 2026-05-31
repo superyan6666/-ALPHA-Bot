@@ -1,0 +1,22 @@
+{
+    "trained_at": "2026-05-30T00:15:06.150055",
+    "train_start_date": "2021-06-29",
+    "train_end_date": "2026-05-13",
+    "num_days": 1179,
+    "num_samples": 1402135,
+    "features": [
+        "clv",
+        "volatility_5d",
+        "alpha_reversal_5d",
+        "alpha_024_approx",
+        "market_ret_20d",
+        "market_ret_60d",
+        "market_vol_20d",
+        "macro_staleness_days"
+    ],
+    "horizon": 10,
+    "mean_ic_30d": 0.016792582977330422,
+    "architecture": "PyTorchDLModel",
+    "epochs": 5,
+    "lr": 0.0003
+}

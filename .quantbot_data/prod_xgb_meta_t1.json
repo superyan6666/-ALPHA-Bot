@@ -1,0 +1,21 @@
+{
+    "trained_at": "2026-05-28T16:34:06.592633",
+    "train_start_date": "2024-04-30",
+    "train_end_date": "2026-05-26",
+    "num_days": 500,
+    "num_samples": 620480,
+    "features": [
+        "sm_corr",
+        "clv",
+        "volatility_5d",
+        "vol_ratio",
+        "alpha_reversal_5d",
+        "alpha_024_approx",
+        "market_ret_20d",
+        "market_ret_60d",
+        "market_vol_20d",
+        "cn_10y_trend"
+    ],
+    "horizon": 1,
+    "mean_ic_30d": 0.02108069798314803
+}
