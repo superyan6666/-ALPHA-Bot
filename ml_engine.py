@@ -18,6 +18,7 @@ class PyTorchDLModel:
         """
         self.device = torch.device("cpu") # ARM local runs on CPU
         self.model = nn.Sequential(
+            nn.BatchNorm1d(input_dim), # [B7 Fix] Scale input features
             nn.Linear(input_dim, 64),
             nn.BatchNorm1d(64),
             nn.ReLU(),
@@ -25,15 +26,25 @@ class PyTorchDLModel:
             nn.Linear(64, 32),
             nn.BatchNorm1d(32),
             nn.ReLU(),
-            nn.Linear(32, 1)
+            nn.Linear(32, 1),
+            nn.Tanh() # [B7 Fix] Bound outputs to [-1, 1] to match target rank
         ).to(self.device)
         self.criterion = nn.MSELoss()
         self.optimizer = optim.Adam(self.model.parameters(), lr=0.001)
         
     def train(self, df_train, feature_cols, target_col='fwd_ret_real', group_col='date', epochs=5, batch_size=2048):
         log.info(f"Training PyTorchDLModel on {len(df_train)} samples...")
-        df_train = df_train.dropna(subset=feature_cols + [target_col]).copy()
+        df_train = df_train.dropna(subset=[target_col]).copy()
         
+        # [B7 Fix] Impute feature NaNs with 0 to match test-time predict() behavior
+        df_train[feature_cols] = df_train[feature_cols].fillna(0)
+        
+        # [B7 Fix] Cross-sectional Target Rank Normalization
+        # Force the model to learn relative Alpha rankings rather than absolute market Beta.
+        if group_col in df_train.columns:
+            log.info(f"Applying cross-sectional ranking to target '{target_col}' grouped by '{group_col}' to isolate Alpha.")
+            df_train[target_col] = df_train.groupby(group_col)[target_col].rank(pct=True) * 2.0 - 1.0
+            
         X_train = torch.tensor(df_train[feature_cols].values, dtype=torch.float32).to(self.device)
         y_train = torch.tensor(df_train[target_col].values, dtype=torch.float32).view(-1, 1).to(self.device)
         

@@ -282,6 +282,88 @@ class Signal:
     plan_b_msg: str = ""
     hold_period_msg: str = ""
 
+import json
+
+class AdvisoryTracker:
+    FILE_PATH = "advisory_tracker.json"
+    
+    @classmethod
+    def load_tracker(cls) -> dict:
+        if os.path.exists(cls.FILE_PATH):
+            try:
+                with open(cls.FILE_PATH, 'r', encoding='utf-8') as f:
+                    return json.load(f)
+            except:
+                pass
+        return {}
+        
+    @classmethod
+    def save_tracker(cls, data: dict):
+        with open(cls.FILE_PATH, 'w', encoding='utf-8') as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+            
+    @classmethod
+    def add_signals(cls, signals: list[Signal], horizon_name: str):
+        tracker = cls.load_tracker()
+        today_str = datetime.now().strftime("%Y-%m-%d")
+        
+        max_days = 10
+        try:
+            h_val = int(horizon_name.replace('T+', ''))
+            max_days = h_val * 2
+        except:
+            pass
+            
+        for s in signals:
+            tracker[s.code] = {
+                'name': s.name,
+                'entry_date': today_str,
+                'target': s.target1,
+                'stop': s.stop_loss,
+                'horizon': horizon_name,
+                'max_days': max_days
+            }
+        cls.save_tracker(tracker)
+        
+    @classmethod
+    def evaluate_and_clean(cls, current_spot: pd.DataFrame) -> list[str]:
+        tracker = cls.load_tracker()
+        if not tracker: return []
+        
+        today_date = datetime.now()
+        spot_dict = current_spot.set_index(C.S_CODE)[C.S_PRICE].to_dict()
+        
+        messages = []
+        codes_to_remove = []
+        
+        for code, info in tracker.items():
+            if code not in spot_dict:
+                continue
+            
+            curr_price = float(spot_dict[code])
+            target = float(info.get('target', 0))
+            stop = float(info.get('stop', 0))
+            entry_date = datetime.strptime(info.get('entry_date', today_date.strftime('%Y-%m-%d')), '%Y-%m-%d')
+            max_days = int(info.get('max_days', 10))
+            
+            days_held = (today_date - entry_date).days
+            
+            if curr_price >= target and target > 0:
+                pct = (curr_price / (target / 1.05) - 1) * 100 if target > 0 else 0
+                messages.append(f"- **{code} ({info['name']})**: 🟢 **调仓建议**：已达或突破第一目标价 `¥{target}` (现价 `¥{curr_price}`)，建议获利了结或减仓。")
+                codes_to_remove.append(code)
+            elif curr_price <= stop and stop > 0:
+                messages.append(f"- **{code} ({info['name']})**: 🔴 **平仓建议**：已跌破防守线 `¥{stop}` (现价 `¥{curr_price}`)，强烈建议止损离场！")
+                codes_to_remove.append(code)
+            elif days_held > max_days:
+                messages.append(f"- **{code} ({info['name']})**: ⏳ **跟踪到期**：已震荡跟踪 {days_held} 天 ({info['horizon']})，超过参考阈值，主动结束跟踪。")
+                codes_to_remove.append(code)
+                
+        for code in codes_to_remove:
+            del tracker[code]
+            
+        cls.save_tracker(tracker)
+        return messages
 
 # ═════════════════════════════════════════════════════════════════════════════
 # 4. 专业量化算法核心库 (Quant Algorithms)
@@ -1590,9 +1672,18 @@ def extract_market_context(df_raw: pd.DataFrame, c_conf: Config) -> tuple[pd.Dat
 
         idx_df = fetch_index('sh000001')
         cl = idx_df['close']
-        ma20 = cl.rolling(20).mean().iloc[-1]
-        pct = (cl.iloc[-1] - cl.iloc[-2]) / cl.iloc[-2] * 100
+        ma60 = cl.rolling(60).mean().iloc[-1] if len(cl) >= 60 else cl.iloc[-1]
+        ma20 = cl.rolling(20).mean().iloc[-1] if len(cl) >= 20 else cl.iloc[-1]
+        ma5 = cl.rolling(5).mean().iloc[-1] if len(cl) >= 5 else cl.iloc[-1]
+        pct = (cl.iloc[-1] - cl.iloc[-2]) / cl.iloc[-2] * 100 if len(cl) >= 2 else 0.0
         
+        # MACD
+        exp1 = cl.ewm(span=12, adjust=False).mean()
+        exp2 = cl.ewm(span=26, adjust=False).mean()
+        macd = exp1 - exp2
+        signal_line = macd.ewm(span=9, adjust=False).mean()
+        macd_dead_cross = macd.iloc[-1] < signal_line.iloc[-1]
+        beta_broken = (cl.iloc[-1] < ma60) and (ma5 < ma20) and macd_dead_cross
         vol_col = 'volume' if 'volume' in idx_df.columns else 'amount' if 'amount' in idx_df.columns else None
         if vol_col and len(idx_df) >= 6:
             today_vol = float(idx_df[vol_col].iloc[-1])
@@ -1637,6 +1728,9 @@ def extract_market_context(df_raw: pd.DataFrame, c_conf: Config) -> tuple[pd.Dat
             market_state = "⚖️ **震荡均衡 (NEUTRAL)**"
             advice = "仓位 40%-60%。指数暂无大级别风险，重个股轻大盘，不盲目追高。"
             market_ok = True
+            
+        if beta_broken:
+            advice = "🚨 **【大盘结构性走熊警告】** 大盘日线跌破 60 日均线且 MACD 死叉，处于绝对熊市结构！建议空仓或极低仓位试错，由于个股可能分化，今日仍推送高潜质标的供观察，但严禁盲目重仓做多！\n\n" + advice
 
         if north_flow <= -80.0:
             market_ok = False
@@ -1856,23 +1950,8 @@ def send_dingtalk(signals: dict[str, list[Signal]], watchlist: list, total_pool:
 
             # --- Formatting Sections ---
             if signals.get('Resonance'):
-                content += "### 🔥 今日最强信号：多周期共振\n\n"
+                content += "### 🔥 今日唯一上榜：全周期共振精选 (Top 5)\n\n"
                 parts = [format_signal(s) for s in signals['Resonance']]
-                content += "\n\n---\n\n".join(parts) + "\n\n---\n\n"
-                
-            if signals.get('T+1'):
-                content += "### ⚡ T+1 极短线突击 (预期持有1天)\n\n"
-                parts = [format_signal(s) for s in signals['T+1']]
-                content += "\n\n---\n\n".join(parts) + "\n\n---\n\n"
-                
-            if signals.get('T+5'):
-                content += "### 🌊 T+5 周频波段 (预期持有1周)\n\n"
-                parts = [format_signal(s) for s in signals['T+5']]
-                content += "\n\n---\n\n".join(parts) + "\n\n---\n\n"
-                
-            if signals.get('T+10'):
-                content += "### ⛰️ T+10 半月趋势 (预期持有半月)\n\n"
-                parts = [format_signal(s) for s in signals['T+10']]
                 content += "\n\n---\n\n".join(parts) + "\n\n---\n\n"
                 
         else:
@@ -1917,6 +1996,10 @@ def get_signals() -> tuple[list[Signal], list, set, int, str, int]:
 
     if 'DATA_MODE' in df_raw.columns and (df_raw['DATA_MODE'] == 'T+1_FALLBACK').any():
         m_msg += "\n\n> 🚨 **严重警告**：今日所有实时行情流中断，当前所有技术信号均基于【昨日 T-1 收盘截面】生成，严禁用于今日盘中实盘交易！\n\n"
+
+    tracker_msgs = AdvisoryTracker.evaluate_and_clean(df_raw)
+    if tracker_msgs:
+        m_msg += "\n\n**📢 往期辅助信号跟踪**\n" + "\n".join(tracker_msgs) + "\n"
 
     if config.RUN_MODE in ('market_only', 'morning'):
         log.info(f"🤖 [{config.RUN_MODE}模式] 完毕，退出个股运算。")
@@ -1972,10 +2055,10 @@ def get_signals() -> tuple[list[Signal], list, set, int, str, int]:
     
     if pool.empty: return [], [], pushed, len(df_clean), m_msg, len(df_clean)
     
-    if len(pool) > 80:
-        log.info(f"💡 触发防爆流截断，基于 Spot 截面数据执行廉价预筛分，保留前 80 只高潜标的参与决选。")
+    if len(pool) > 200:
+        log.info(f"💡 触发防爆流截断，基于 Spot 截面数据执行廉价预筛分，保留前 200 只高潜标的参与决选。")
         pool['_pre_score'] = vectorized_prescreen(pool, is_fallback)
-        pool = pool.sort_values(by='_pre_score', ascending=False).head(80)
+        pool = pool.sort_values(by='_pre_score', ascending=False).head(200)
         pool = pool.drop(columns=['_pre_score'])
         
     # [风控守门人] 全局 NaN 空洞扫描
@@ -2030,10 +2113,6 @@ def get_signals() -> tuple[list[Signal], list, set, int, str, int]:
     
     try:
         panel = build_ml_features(panel)
-        import json
-        with open('.quantbot_data/default_genes.json') as f:
-            genes = json.load(f)
-        feature_cols = genes['features']
         feature_success = True
     except Exception as e:
         log.error(f"🚨 ML Feature Computation Failed: {e}")
@@ -2044,127 +2123,106 @@ def get_signals() -> tuple[list[Signal], list, set, int, str, int]:
     # Extract today's cross section
     today_str = now.strftime('%Y-%m-%d')
     today_panel = panel[panel['date'] == pd.to_datetime(today_str)].copy()
-    # Load Models and Predict
-    h_params = [(1, 5), (5, 3), (10, 2)]
-    horizon_results = {}
     
-    for h, top_k in h_params:
+    # Load Models and Predict
+    horizons = [1, 5, 10, 20]
+    
+    import json
+    for h in horizons:
         model_path = f'.quantbot_data/prod_pt_model_t{h}.pth'
-        if not os.path.exists(model_path):
-            log.warning(f"⚠️ 找不到 T+{h} 模型: {model_path}，跳过此周期的选股。")
-            horizon_results[f'T+{h}'] = []
+        meta_path = f'.quantbot_data/prod_pt_meta_t{h}.json'
+        if not os.path.exists(model_path) or not os.path.exists(meta_path):
+            log.warning(f"⚠️ 找不到 T+{h} 模型或元数据，跳过此周期的选股。")
+            today_panel[f'xgb_score_t{h}'] = 0.5
+            today_panel[f'rank_t{h}'] = 0.5
             continue
             
-        # Initialize PyTorchDLModel with the number of features
-        ltr = PyTorchDLModel(input_dim=len(feature_cols))
+        with open(meta_path, 'r') as f:
+            features = json.load(f)['features']
+            
+        ltr = PyTorchDLModel(input_dim=len(features))
         ltr.load_model(model_path)
         
         if feature_success:
-            # Predict using PyTorchDLModel
-            xgb_preds = ltr.predict(today_panel, feature_cols)
+            xgb_preds = ltr.predict(today_panel, features)
             if np.isnan(xgb_preds).all():
                 log.critical(f"🚨 致命错误：T+{h} DL输出全部NaN！")
-                horizon_results[f'T+{h}'] = []
-                continue
-            today_panel[f'xgb_score_t{h}'] = xgb_preds
+                today_panel[f'xgb_score_t{h}'] = 0.5
+            else:
+                today_panel[f'xgb_score_t{h}'] = xgb_preds
         else:
             today_panel[f'xgb_score_t{h}'] = 0.5
             
-        candidates = today_panel.sort_values(f'xgb_score_t{h}', ascending=False)
-        candidates = candidates[candidates[f'xgb_score_t{h}'] >= 0.5]
-        
-        h_signals = []
-        for _, ml_row in candidates.iterrows():
-            code = ml_row['code']
-            if code not in stock_infos: continue
-            info = stock_infos[code]
-            row, data, stop = info['row'], info['data'], info['stop']
-            
-            score = float(ml_row[f'xgb_score_t{h}']) * 100 
-            level = f"⚡ T+{h} AI选股"
-            
-            # Construct human-readable reasons from ML features
-            reas_list = [f"🏆 **AI 胜率模型 (T+{h}) 打分**: `{score:.2f}`"]
-            if 'alpha_reversal_5d' in ml_row and not pd.isna(ml_row['alpha_reversal_5d']):
-                reas_list.append(f"🔄 **短期反转强度**: `{ml_row['alpha_reversal_5d']:.3f}`")
-            if 'clv' in ml_row and not pd.isna(ml_row['clv']):
-                reas_list.append(f"📌 **收盘价位置分布 (CLV)**: `{ml_row['clv']:.2f}`")
-            if 'volatility_5d' in ml_row and not pd.isna(ml_row['volatility_5d']):
-                reas_list.append(f"📉 **5日波动率**: `{ml_row['volatility_5d']:.2f}%`")
-            reas = "\n".join([f"- {r}" for r in reas_list])
-            
-            target1_price = calc_target_price(row[C.S_PRICE], stop, data)
-            money_msg = format_money_risk_msg(row[C.S_PRICE], stop, target1_price)
-            tranche_msg = generate_tranche_plan(row[C.S_PRICE], score, m_ok, m_overheated)
-            plan_b_msg = generate_plan_b(row[C.S_PRICE], stop, data['ma20_val'])
-            
-            if h == 1:
-                hold_msg = generate_hold_period(data['adx'], data['price_pct'], data['has_chip_break'])
-            elif h == 5:
-                hold_msg = "> ⏳ **建议持仓周期 (T+5 波段)**：预期持有参考约 1 周。只要未跌破防守线，可参考忽略日内波动。"
-            else:
-                hold_msg = "> ⏳ **建议持仓周期 (T+10 趋势)**：预期持有参考约半个月。属于长线信号，适合底仓参考。"
-            
-            sig = Signal(
-                code=row[C.S_CODE], name=row[C.S_NAME], price=row[C.S_PRICE],
-                pct_chg=f"{row[C.S_PCT]}%", score=score, level=level,
-                trigger_time=now.strftime('%H:%M'), reasons=reas,
-                stop_loss=round(stop, 2), target1=target1_price,
-                ma10=round(data['ma10_val'], 2),
-                money_risk_msg=money_msg, tranche_plan_msg=tranche_msg,
-                plan_b_msg=plan_b_msg, hold_period_msg=hold_msg
-            )
-            h_signals.append(sig)
-            
-        h_signals.sort(key=lambda x: (x.score, x.code), reverse=True)
-        
-        # Sector limits for this horizon
-        final_h = []
-        sector_counts = {}
-        for s in h_signals:
-            sector = hot_sectors_map.get(s.code)
-            if sector:
-                if sector_counts.get(sector, 0) >= 2:
-                    continue
-                sector_counts[sector] = sector_counts.get(sector, 0) + 1
-            final_h.append(s)
-            
-        horizon_results[f'T+{h}'] = final_h[:top_k]
-        
-    # Process Resonance (共振)
-    code_horizons = {}
-    for h_name, sigs in horizon_results.items():
-        for s in sigs:
-            if s.code not in code_horizons:
-                code_horizons[s.code] = []
-            code_horizons[s.code].append(h_name)
-            
+        # Cross-sectional rank
+        today_panel[f'rank_t{h}'] = today_panel[f'xgb_score_t{h}'].rank(pct=True)
+
+    # Apply Veto System
+    today_panel['core_rank'] = (today_panel.get('rank_t10', 0.5) + today_panel.get('rank_t20', 0.5)) / 2.0
+    
+    # Baseline pool: Top 10% of core
+    candidates = today_panel[today_panel['core_rank'] >= 0.90].copy()
+    
+    # Filter A: T+1 Anti-Chasing (rank_t1 < 0.95)
+    candidates = candidates[candidates['rank_t1'] < 0.95]
+    
+    # Filter B: T+5 Anti-Bleeding (rank_t5 > 0.10)
+    candidates = candidates[candidates['rank_t5'] > 0.10]
+    
+    # Sort and pick top K
+    candidates = candidates.sort_values('core_rank', ascending=False).head(5)
+    
     resonance_signals = []
-    final_horizon_results = {'T+1': [], 'T+5': [], 'T+10': []}
-    
-    code_to_sig = {}
-    for sigs in horizon_results.values():
-        for s in sigs:
-            if s.code not in code_to_sig or s.score > code_to_sig[s.code].score:
-                code_to_sig[s.code] = s
+    for _, ml_row in candidates.iterrows():
+        code = ml_row['code']
+        if code not in stock_infos: continue
+        info = stock_infos[code]
+        row, data, stop = info['row'], info['data'], info['stop']
+        
+        score = float(ml_row['core_rank']) * 100 
+        t1_rank = float(ml_row.get('rank_t1', 0.5)) * 100
+        t5_rank = float(ml_row.get('rank_t5', 0.5)) * 100
+        
+        t1_tag = "⚖️ 短线波动中性，支持按计划常规建仓"
+        if t1_rank >= 80.0:  
+            t1_tag = "🎯 短线超跌反弹动能强，早盘绝佳买点"
+        elif t1_rank <= 35.0:
+            t1_tag = "⏳ 短线存在获利盘抛压，建议观望或逢低挂单"
             
-    for code, h_list in code_horizons.items():
-        sig = code_to_sig[code]
-        if len(h_list) > 1:
-            sig.level = f"🔥 多周期共振 ({', '.join(h_list)})"
-            resonance_signals.append(sig)
-        else:
-            h_name = h_list[0]
-            final_horizon_results[h_name].append(sig)
-            
-    resonance_signals.sort(key=lambda x: (x.score, x.code), reverse=True)
-    
+        level = f"🔥 共振得分: {score:.1f} (T+10/T+20主脑)\n  ⚡ T+1独立择时: {t1_rank:.1f} ({t1_tag})\n  ⚡ T+5波段评估: {t5_rank:.1f}"
+        
+        reas_list = [f"🏆 **核心基本盘打分**: `{score:.2f}`"]
+        if 'alpha_reversal_5d' in ml_row and not pd.isna(ml_row['alpha_reversal_5d']):
+            reas_list.append(f"🔄 **短期反转强度**: `{ml_row['alpha_reversal_5d']:.3f}`")
+        if 'clv' in ml_row and not pd.isna(ml_row['clv']):
+            reas_list.append(f"📌 **收盘价位置分布 (CLV)**: `{ml_row['clv']:.2f}`")
+        if 'volatility_5d' in ml_row and not pd.isna(ml_row['volatility_5d']):
+            reas_list.append(f"📉 **5日波动率**: `{ml_row['volatility_5d']:.2f}%`")
+        reas = "\n".join([f"- {r}" for r in reas_list])
+        
+        target1_price = calc_target_price(row[C.S_PRICE], stop, data)
+        money_msg = format_money_risk_msg(row[C.S_PRICE], stop, target1_price)
+        tranche_msg = generate_tranche_plan(row[C.S_PRICE], score, m_ok, m_overheated)
+        plan_b_msg = generate_plan_b(row[C.S_PRICE], stop, data['ma20_val'])
+        
+        hold_msg = "> ⏳ **建议持仓周期 (T+10 趋势)**：预期持有参考约半个月。属于长线信号，经过了双重滤网清洗，极其适合作为底仓。"
+        
+        sig = Signal(
+            code=row[C.S_CODE], name=row[C.S_NAME], price=row[C.S_PRICE],
+            pct_chg=f"{row[C.S_PCT]}%", score=score, level=level,
+            trigger_time=now.strftime('%H:%M'), reasons=reas,
+            stop_loss=round(stop, 2), target1=target1_price,
+            ma10=round(data['ma10_val'], 2),
+            money_risk_msg=money_msg, tranche_plan_msg=tranche_msg,
+            plan_b_msg=plan_b_msg, hold_period_msg=hold_msg
+        )
+        resonance_signals.append(sig)
+        
     confirmed_data_dict = {
-        'Resonance': resonance_signals,
-        'T+1': final_horizon_results['T+1'],
-        'T+5': final_horizon_results['T+5'],
-        'T+10': final_horizon_results['T+10']
+        'Resonance': resonance_signals
     }
+    
+    # Push the generated signals to AdvisoryTracker
+    AdvisoryTracker.add_signals(resonance_signals, 'T+10') # Use T+10 as default tracking horizon for Resonance
     
     watchlist_data.sort(key=lambda x: (x[2], x[1]), reverse=True) 
     
@@ -2257,7 +2315,15 @@ if __name__ == '__main__':
                 f"通知链路测试成功！\n- 时间: {now}\n- 状态: GitHub Actions 触发器已打通。"
             )
         elif not config.DINGTALK_WEBHOOK and not config.FEISHU_WEBHOOK:
-            log.error("未配置 DINGTALK_WEBHOOK 或 FEISHU_WEBHOOK，跳过执行。")
+            log.warning("未配置 WEBHOOK，将切换为本地打印模式供测试。")
+            sigs, watch, pushed, pool_size, m_msg, total_mkt = get_signals()
+            import pprint
+            log.info("============== 本地信号输出 ==============")
+            for cat, arr in sigs.items():
+                print(f"[{cat}]")
+                for s in arr:
+                    print(f"{s.code} ({s.name}) {s.price} - {s.level}")
+            log.info("=========================================")
         else:
             sigs, watch, pushed, pool_size, m_msg, total_mkt = get_signals()
             send_dingtalk(sigs, watch, pool_size, total_mkt, m_msg)

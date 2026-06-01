@@ -18,12 +18,19 @@ def train_production_model():
     with open('.quantbot_data/default_genes.json') as f:
         genes = json.load(f)
         
-    feature_cols = genes['features']
     epochs = genes['model']['epochs']
     lr = genes['model']['learning_rate']
     batch_size = genes['model'].get('batch_size', 2048)
     
-    log.info(f"Loaded Genes -> Features: {len(feature_cols)}, Epochs: {epochs}, LR: {lr}, Batch: {batch_size}")
+    # Load Horizon-specific features
+    horizon_features_path = '.quantbot_data/horizon_features.json'
+    if not os.path.exists(horizon_features_path):
+        log.error(f"Cannot find {horizon_features_path}. Run select_features.py first.")
+        return
+    with open(horizon_features_path) as f:
+        horizon_features = json.load(f)
+        
+    log.info(f"Loaded Genes -> Epochs: {epochs}, LR: {lr}, Batch: {batch_size}")
     
     ashare_path = '.quantbot_data/ashare_daily.parquet'
     if not os.path.exists(ashare_path):
@@ -47,20 +54,32 @@ def train_production_model():
     panel['fwd_ret_t1'] = panel.groupby('code')['close'].shift(-1) / (panel.groupby('code')['open'].shift(-1) + 1e-5) - 1
     panel['fwd_ret_t5'] = panel.groupby('code')['close'].shift(-5) / (panel.groupby('code')['open'].shift(-1) + 1e-5) - 1
     panel['fwd_ret_t10'] = panel.groupby('code')['close'].shift(-10) / (panel.groupby('code')['open'].shift(-1) + 1e-5) - 1
+    panel['fwd_ret_t20'] = panel.groupby('code')['close'].shift(-20) / (panel.groupby('code')['open'].shift(-1) + 1e-5) - 1
+    panel['fwd_ret_t40'] = panel.groupby('code')['close'].shift(-40) / (panel.groupby('code')['open'].shift(-1) + 1e-5) - 1
+    panel['fwd_ret_t60'] = panel.groupby('code')['close'].shift(-60) / (panel.groupby('code')['open'].shift(-1) + 1e-5) - 1
+    panel['fwd_ret_t120'] = panel.groupby('code')['close'].shift(-120) / (panel.groupby('code')['open'].shift(-1) + 1e-5) - 1
     
     # 2. Build Features using DRY engine
     panel = build_ml_features(panel)
     
     # Apply Liquidity Gate
-    panel = apply_liquidity_gate(panel, amihud_col='amihud_20', threshold_pct=0.90)
+    amihud_cols = [c for c in panel.columns if c.startswith('F_amihud_')]
+    amihud_col = amihud_cols[0] if amihud_cols else 'F_amihud_20'
+    panel = apply_liquidity_gate(panel, amihud_col=amihud_col, threshold_pct=0.90)
     panel = panel[~panel['is_limit']].copy() if 'is_limit' in panel.columns else panel
     
-    horizons = [1, 5, 10]
+    horizons = [1, 5, 10, 20]
     for h in horizons:
         target_col = f'fwd_ret_t{h}'
-        log.info(f"\n{'='*40}\nTraining PyTorch Model for Horizon T+{h}\n{'='*40}")
+        horizon_key = f"T+{h}"
+        feature_cols = horizon_features.get(horizon_key, [])
+        if not feature_cols:
+            log.error(f"No features found for {horizon_key} in horizon_features.json")
+            continue
+            
+        log.info(f"\n{'='*40}\nTraining PyTorch Model for Horizon T+{h} with {len(feature_cols)} features\n{'='*40}")
         
-        # Drop NaNs for this specific horizon target
+        # 延迟 Dropna (Delayed Dropna): 仅删除当前周期所需特征的缺失值
         ml_df = panel.dropna(subset=feature_cols + [target_col, 'date']).copy()
         
         dates = sorted(ml_df['date'].unique())
