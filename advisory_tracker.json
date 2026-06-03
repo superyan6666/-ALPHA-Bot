@@ -30,5 +30,13 @@
     "stop": 8.41,
     "horizon": "T+10",
     "max_days": 20
+  },
+  "300724": {
+    "name": "捷佳伟创",
+    "entry_date": "2026-06-03",
+    "target": 91.47,
+    "stop": 66.48,
+    "horizon": "T+10",
+    "max_days": 20
   }
 }
