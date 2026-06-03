@@ -1,0 +1,10 @@
+factor,anchor_window
+rsi,120
+mom,20
+bias,120
+volatility,20
+amihud,5
+drawdown,5
+runup,60
+atr,5
+pv_corr,10
