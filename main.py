@@ -553,9 +553,14 @@ class DataProxy:
                 log.warning(f"Tushare 初始化失败: {e}")
 
     def __del__(self):
+        self.cleanup()
+
+    def cleanup(self):
         if self.bs_logged_in and bs is not None:
-            try: bs.logout()
+            try: 
+                bs.logout()
             except: pass
+            self.bs_logged_in = False
 
     def _login_baostock(self):
         if bs is not None and not self.bs_logged_in:
@@ -881,7 +886,8 @@ class DataProxy:
                 
         if df is None:
             try:
-                df = self._fetch_spot_netease()
+                # df = self._fetch_spot_netease() # [B10] 禁用已失效的网易接口，防止无意义的超时堵塞
+                df = None
             except Exception as e:
                 log.debug(f"netease spot failed: {e}")
                 
@@ -2346,3 +2352,6 @@ if __name__ == '__main__':
         log.critical(f"系统崩溃: {e}", exc_info=True)
         error_msg = f"🚨 **AI量化引擎崩溃告警**\n\n**时间**: {_today_str()}\n**环境**: GitHub Actions\n**异常信息**: {str(e)[:300]}..."
         NotificationGateway.send("🚨 AI量化引擎崩溃告警", error_msg, template="red")
+        
+    finally:
+        _DATA_PROXY.cleanup()

@@ -36,8 +36,8 @@ class PyTorchDLModel:
         log.info(f"Training PyTorchDLModel on {len(df_train)} samples...")
         df_train = df_train.dropna(subset=[target_col]).copy()
         
-        # [B7 Fix] Impute feature NaNs with 0 to match test-time predict() behavior
-        df_train[feature_cols] = df_train[feature_cols].replace([np.inf, -np.inf], np.nan).fillna(0)
+        # [B3.1 铁律修复] 禁止静默 fillna(0)。如果特征存在 NaN/Inf，必须予以剔除
+        df_train = df_train.replace([np.inf, -np.inf], np.nan).dropna(subset=feature_cols + [target_col]).copy()
         
         # [B7 Fix] Cross-sectional Target Rank Normalization
         # Force the model to learn relative Alpha rankings rather than absolute market Beta.
@@ -65,10 +65,22 @@ class PyTorchDLModel:
         return self.model
         
     def predict(self, df_test, feature_cols):
-        X_test = torch.tensor(df_test[feature_cols].replace([np.inf, -np.inf], np.nan).fillna(0).values, dtype=torch.float32).to(self.device)
-        self.model.eval()
-        with torch.no_grad():
-            preds = self.model(X_test).cpu().numpy().flatten()
+        # [B3.1 铁律修复] 禁止对含有 NaN/Inf 特征的样本强行输出预测分
+        X_df = df_test[feature_cols].replace([np.inf, -np.inf], np.nan)
+        valid_mask = X_df.notna().all(axis=1)
+        
+        preds = np.full(len(df_test), np.nan)
+        if valid_mask.sum() > 0:
+            X_valid = torch.tensor(X_df[valid_mask].values, dtype=torch.float32).to(self.device)
+            self.model.eval()
+            with torch.no_grad():
+                valid_preds = self.model(X_valid).cpu().numpy().flatten()
+            preds[valid_mask] = valid_preds
+            
+        nan_count = (~valid_mask).sum()
+        if nan_count > 0:
+            log.warning(f"⚠️ PyTorch 引擎拒绝为 {nan_count} 只特征异常 (NaN/Inf) 的股票提供预测分数。")
+            
         return preds
         
     def save_model(self, filepath: str):
