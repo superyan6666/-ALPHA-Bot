@@ -58,7 +58,7 @@ jobs:
       - name: 安装依赖
         run: |
           python -m pip install --upgrade pip
-          pip install --upgrade akshare pandas numpy requests pytz baostock efinance tushare yfinance pyarrow xgboost scikit-learn
+          pip install --upgrade akshare pandas numpy requests pytz baostock efinance tushare yfinance pyarrow xgboost scikit-learn torch
 
       - name: 启动监控引擎 / 测试连通性
         env:
@@ -91,11 +91,10 @@ jobs:
             python main.py
           fi
 
-      - name: 保存运行状态与模拟盘账本
+      - name: 保存运行状态与辅助跟踪账本
         if: ${{ github.event_name == 'schedule' || inputs.run_mode == 'normal' }} 
         uses: stefanzweifel/git-auto-commit-action@v5
         with:
-          commit_message: "[bot] 更新推送状态与AI模拟盘账本"
-          # 【关键修复】：将新产生的 paper_trades.json 纳入自动提交，确保胜率能够跨日继承进化
-          file_pattern: 'pushed_state.json paper_trades.json'
+          commit_message: "[bot] 更新推送状态与AI辅助跟踪队列"
+          file_pattern: 'pushed_state.json advisory_tracker.json'
           commit_options: '--no-verify --signoff'

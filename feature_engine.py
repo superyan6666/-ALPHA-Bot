@@ -70,7 +70,8 @@ def build_ml_features(panel: pd.DataFrame) -> pd.DataFrame:
     # 1. Smart Money Correlation (sm_corr) - using T-1
     # Note: kept for legacy compatibility, not actively used by best PyTorch model
     panel['sm_corr'] = panel.groupby('code').apply(
-        lambda x: x['pct_chg'].shift(1).rolling(20).corr(x['vol'].shift(1))
+        lambda x: x['pct_chg'].shift(1).rolling(20).corr(x['vol'].shift(1)),
+        include_groups=False
     ).reset_index(0, drop=True)
     
     # 2. Amihud Illiquidity (amihud_20) - using T-1
@@ -178,7 +179,7 @@ def build_ml_features(panel: pd.DataFrame) -> pd.DataFrame:
     def calc_pv_corr(g):
         return g['close'].shift(1).rolling(window=w_pv, min_periods=w_pv//2).corr(g['vol'].shift(1))
 
-    panel[f'F_pv_corr_{w_pv}'] = panel.groupby('code', group_keys=False).apply(calc_pv_corr)
+    panel[f'F_pv_corr_{w_pv}'] = panel.groupby('code', group_keys=False).apply(calc_pv_corr, include_groups=False)
     panel[f'F_pv_corr_{w_pv}'] = panel[f'F_pv_corr_{w_pv}'].fillna(0.0)
     
     # [重要加固] 截面去极值 (Cross-sectional Winsorization)
