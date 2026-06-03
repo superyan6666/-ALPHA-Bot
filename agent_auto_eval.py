@@ -104,6 +104,15 @@ class SandboxEvaluator:
         panel['fwd_ret_1d'] = panel['next_close'] / panel['close'] - 1  # For linear eval compatibility
         panel['fwd_ret_real'] = panel['next_close'] / (panel['next_open'] + 1e-5) - 1 # Realizable friction-aware return
         
+        # Build fwd_ret for all horizons
+        panel['fwd_ret_t1'] = panel.groupby('code')['close'].shift(-1) / (panel.groupby('code')['open'].shift(-1) + 1e-5) - 1
+        panel['fwd_ret_t5'] = panel.groupby('code')['close'].shift(-5) / (panel.groupby('code')['open'].shift(-1) + 1e-5) - 1
+        panel['fwd_ret_t10'] = panel.groupby('code')['close'].shift(-10) / (panel.groupby('code')['open'].shift(-1) + 1e-5) - 1
+        panel['fwd_ret_t20'] = panel.groupby('code')['close'].shift(-20) / (panel.groupby('code')['open'].shift(-1) + 1e-5) - 1
+        panel['fwd_ret_t40'] = panel.groupby('code')['close'].shift(-40) / (panel.groupby('code')['open'].shift(-1) + 1e-5) - 1
+        panel['fwd_ret_t60'] = panel.groupby('code')['close'].shift(-60) / (panel.groupby('code')['open'].shift(-1) + 1e-5) - 1
+        panel['fwd_ret_t120'] = panel.groupby('code')['close'].shift(-120) / (panel.groupby('code')['open'].shift(-1) + 1e-5) - 1
+        
         panel = panel.dropna(subset=['fwd_ret_1d', 'fwd_ret_real'])
         return panel
 
@@ -116,57 +125,9 @@ class SandboxEvaluator:
             panel['prev_close'] = panel.groupby('code')['close'].shift(1)
             panel['pct_chg'] = (panel['close'] / panel['prev_close'] - 1) * 100
             
-        # 1. Smart Money Correlation (sm_corr)
-        # rolling 20-day correlation between daily return and volume
-        log.info("Computing SM_CORR...")
-        panel['sm_corr'] = panel.groupby('code').apply(
-            lambda x: x['pct_chg'].rolling(20).corr(x['vol'])
-        ).reset_index(0, drop=True)
-        
-        # 2. Amihud Illiquidity (amihud_20)
-        # Abs(Return) / (Price * Volume) * 1e6
-        log.info("Computing AMIHUD...")
-        amihud_raw = panel['pct_chg'].abs() / (panel['vol'] * panel['close'] + 1e-5) * 1e6
-        panel['amihud'] = np.where(panel.get('is_limit', False), 99999.0, amihud_raw)
-        panel['amihud_20'] = panel.groupby('code')['amihud'].transform(lambda x: x.rolling(20).mean())
-        
-        # 3. Close Location Value (CLV)
-        log.info("Computing CLV...")
-        panel['clv'] = (panel['close'] - panel['low']) / (panel['high'] - panel['low'] + 1e-8)
-        
-        
-        # 4. Volatility and Volume
-        log.info("Computing Vol/Vol features...")
-        panel['volatility_5d'] = panel.groupby('code')['pct_chg'].transform(lambda x: x.rolling(5).std())
-        panel['vol_ratio'] = panel['vol'] / (panel.groupby('code')['vol'].transform(lambda x: x.rolling(5).mean()) + 1e-5)
-        
-        # 5. Momentum
-        panel['alpha_reversal_5d'] = - (panel['close'] / panel.groupby('code')['close'].shift(5) - 1)
-        panel['alpha_024_approx'] = panel.groupby('code')['close'].transform(lambda x: x.rolling(20).mean()) / (panel['close'] + 1e-5) - 1
-        
-        # 6. Market Regime Proxy (Global Broadcast)
-        log.info("Computing Market Regime Features...")
-        # Cross-sectional equal-weighted average return of the market
-        market_daily = panel.groupby('date')['pct_chg'].mean().reset_index()
-        market_daily.rename(columns={'pct_chg': 'market_ret'}, inplace=True)
-        market_daily['market_ret_20d'] = market_daily['market_ret'].rolling(20, min_periods=5).mean()
-        market_daily['market_ret_60d'] = market_daily['market_ret'].rolling(60, min_periods=20).mean()
-        market_daily['market_vol_20d'] = market_daily['market_ret'].rolling(20, min_periods=5).std()
-        
-        # Merge back to panel
-        panel = pd.merge(panel, market_daily[['date', 'market_ret_20d', 'market_ret_60d', 'market_vol_20d']], on='date', how='left')
-        
-        # Merge Macro Features (China 10Y Trend)
-        macro_path = '.quantbot_data/macro_daily.parquet'
-        if os.path.exists(macro_path):
-            macro_df = pd.read_parquet(macro_path)
-            # Merge on date, and forward fill in case some dates are missing in macro_df
-            panel = pd.merge(panel, macro_df[['cn_10y_trend']], left_on='date', right_index=True, how='left')
-            panel['cn_10y_trend'] = panel['cn_10y_trend'].ffill()
-        else:
-            log.warning(f"Macro data not found at {macro_path}. cn_10y_trend will be NaN.")
-            panel['cn_10y_trend'] = np.nan
-        
+        from feature_engine import build_ml_features
+        log.info("Building features via feature_engine.py to maintain DRY...")
+        panel = build_ml_features(panel)
         return panel
         
     def evaluate_ml_model(self, panel):
@@ -174,93 +135,156 @@ class SandboxEvaluator:
         log.info("--- Starting Machine Learning Evaluation ---")
         
         # Apply Liquidity Gate
-        panel = apply_liquidity_gate(panel, amihud_col='amihud_20', threshold_pct=0.90)
+        amihud_cols = [c for c in panel.columns if c.startswith('F_amihud_')]
+        amihud_col = amihud_cols[0] if amihud_cols else 'F_amihud_20'
+        panel = apply_liquidity_gate(panel, amihud_col=amihud_col, threshold_pct=0.90)
         
         # Filter limits
         panel = panel[~panel['is_limit']].copy()
         
-        feature_cols = ['sm_corr', 'clv', 'volatility_5d', 'vol_ratio', 'alpha_reversal_5d', 'alpha_024_approx',
-                        'market_ret_20d', 'market_ret_60d', 'market_vol_20d', 'cn_10y_trend']
-        
-        # Drop NaNs
-        ml_df = panel.dropna(subset=feature_cols + ['fwd_ret_real', 'date']).copy()
-        
-        dates = sorted(ml_df['date'].unique())
-        if len(dates) < 500:
-            log.warning("Not enough dates for WFO (need > 500).")
+        # Load horizon specific features
+        import json
+        horizon_features_path = '.quantbot_data/horizon_features.json'
+        if not os.path.exists(horizon_features_path):
+            log.error("horizon_features.json not found! Run select_features.py first.")
             return
-            
+        with open(horizon_features_path) as f:
+            horizon_features = json.load(f)
+        
         train_window = 500
         step = 125
         
-        all_test_preds = []
-        feature_importances = []
+        horizons = [10, 20]
+        all_oos_dfs = []
         
-        log.info(f"Starting Walk-Forward Optimization (Train={train_window}d, Step={step}d)")
+        log.info(f"Starting Walk-Forward Optimization for {len(horizons)} horizons...")
         
-        for idx in range(train_window, len(dates), step):
-            train_dates = dates[max(0, idx - train_window):idx]
-            test_dates = dates[idx:min(len(dates), idx + step)]
-            
-            if len(test_dates) == 0:
-                break
+        for h in horizons:
+            horizon_key = f"T+{h}"
+            feature_cols = horizon_features.get(horizon_key, [])
+            if not feature_cols:
+                log.error(f"No features found for {horizon_key}")
+                continue
                 
-            train_df = ml_df[ml_df['date'].isin(train_dates)].copy()
-            test_df = ml_df[ml_df['date'].isin(test_dates)].copy()
+            log.info(f"\n{'='*40}\nRunning WFO for Horizon T+{h} with {len(feature_cols)} features\n{'='*40}")
+            target_col = f'fwd_ret_t{h}'
             
-            # Diagnostic: Market State Comparison
-            train_mkt = train_df['market_ret_20d'].mean()
-            test_mkt = test_df['market_ret_20d'].mean()
-            log.info(f"--- Fold [{test_dates[0].strftime('%Y-%m-%d')} to {test_dates[-1].strftime('%Y-%m-%d')}] ---")
-            log.info(f"Train State (mkt_ret_20d mean): {train_mkt:.4f} | Test State: {test_mkt:.4f}")
-            if abs(train_mkt - test_mkt) > 0.5:
-                log.warning(f"Significant market state shift detected between train and test!")
+            # Delayed Dropna specific to this horizon
+            ml_df = panel.dropna(subset=feature_cols + ['date', target_col]).copy()
+            
+            dates = sorted(ml_df['date'].unique())
+            if len(dates) < 500:
+                log.warning(f"Not enough dates for WFO on T+{h} (need > 500), got {len(dates)}.")
+                continue
+            all_test_preds = []
+            
+            for idx in range(train_window, len(dates), step):
+                train_dates = dates[max(0, idx - train_window):idx]
+                test_dates = dates[idx:min(len(dates), idx + step)]
+                if len(test_dates) == 0: break
                 
-            ltr = XGBoostLTR()
-            ltr.train(train_df, feature_cols, target_col='fwd_ret_real', group_col='date')
+                train_df = ml_df[ml_df['date'].isin(train_dates)].copy()
+                test_df = ml_df[ml_df['date'].isin(test_dates)].copy()
+                
+                from ml_engine import PyTorchDLModel
+                model = PyTorchDLModel(input_dim=len(feature_cols))
+                # WFO is slow, use fewer epochs (e.g., 3) for evaluation
+                model.train(train_df, feature_cols, target_col=target_col, group_col='date', epochs=3)
+                
+                preds = model.predict(test_df, feature_cols)
+                test_df[f'xgb_score_t{h}'] = preds
+                all_test_preds.append(test_df[['date', 'code', f'xgb_score_t{h}', 'fwd_ret_real', 'fwd_ret_1d', target_col]])
+                
+                # Permutation Importance (Scorer / 打分器) on the last fold test set to see what drives the model
+                if idx + step >= len(dates): 
+                    log.info(f"--- Permutation Importance (打分器) for Horizon T+{h} ---")
+                    import torch
+                    from sklearn.metrics import mean_squared_error
+                    baseline_mse = mean_squared_error(test_df[target_col].fillna(0), preds)
+                    importances = []
+                    test_vals = test_df[feature_cols].fillna(0).values
+                    for i, col in enumerate(feature_cols):
+                        # Permute the i-th column
+                        perm_vals = test_vals.copy()
+                        np.random.shuffle(perm_vals[:, i])
+                        
+                        model.model.eval()
+                        with torch.no_grad():
+                            perm_X = torch.tensor(perm_vals, dtype=torch.float32).to(model.device)
+                            perm_preds = model.model(perm_X).cpu().numpy().flatten()
+                            
+                        perm_mse = mean_squared_error(test_df[target_col].fillna(0), perm_preds)
+                        importance = perm_mse - baseline_mse
+                        importances.append((col, importance))
+                        
+                    importances.sort(key=lambda x: x[1], reverse=True)
+                    for col, imp in importances[:10]: # Print top 10
+                        log.info(f"  {col}: {imp:.6f}")
+                        
+            oos_h = pd.concat(all_test_preds, ignore_index=True)
+            all_oos_dfs.append(oos_h)
             
-            # Store importance
-            imp_df = ltr.get_feature_importance(feature_cols)
-            feature_importances.append(imp_df.set_index('feature')['importance'])
+        # Merge all horizon OOS predictions
+        oos_df = all_oos_dfs[0]
+        for i in range(1, len(all_oos_dfs)):
+            oos_df = oos_df.merge(all_oos_dfs[i][['date', 'code', f'xgb_score_t{horizons[i]}', f'fwd_ret_t{horizons[i]}']], on=['date', 'code'], how='left')
             
-            # Predict
-            test_df['xgb_score'] = ltr.predict(test_df, feature_cols)
-            all_test_preds.append(test_df[['date', 'code', 'xgb_score', 'fwd_ret_real']])
-            
-        if not all_test_preds:
-            log.error("No WFO predictions generated.")
-            return
-            
-        # Compile all OOS predictions
-        oos_df = pd.concat(all_test_preds, ignore_index=True)
+        # Save OOS predictions for weight optimization
+        os.makedirs('.quantbot_data', exist_ok=True)
+        oos_df.to_csv('.quantbot_data/oos_preds.csv', index=False)
+        log.info("Saved OOS predictions to .quantbot_data/oos_preds.csv")
+        
         log.info(f"WFO Completed. Total OOS predictions: {len(oos_df)}")
         
-        # Aggregate Feature Importances
-        agg_imp = pd.concat(feature_importances, axis=1).mean(axis=1).sort_values(ascending=False)
-        log.info("Average WFO Feature Importance (Gain):")
-        for feat, gain in agg_imp.items():
-            log.info(f"  {feat}: {gain:.4f}")
-        
         # Group by prediction deciles across the concatenated OOS dataframe
-        def _group_pred(group):
+        def _group_pred_col(group, score_col):
             if len(group) < 5: return pd.Series(index=group.index, dtype=float)
             try:
-                return pd.qcut(group['xgb_score'], 5, labels=[1, 2, 3, 4, 5], duplicates='drop')
+                return pd.qcut(group[score_col], 5, labels=[1, 2, 3, 4, 5], duplicates='drop')
             except:
                 return pd.Series(index=group.index, dtype=float)
-                
-        oos_df['xgb_quantile'] = oos_df.groupby('date').apply(_group_pred).reset_index(0, drop=True)
-        oos_df = oos_df.dropna(subset=['xgb_quantile'])
-        
-        # Calc returns (using realistic friction-aware return)
-        group_returns = oos_df.groupby('xgb_quantile')['fwd_ret_real'].mean() * 10000 # bps
-        
-        log.info("WFO Out-of-Sample Daily Mean Return by Quantile (bps):")
-        for q, ret in group_returns.items():
-            log.info(f"  Q{q}: {ret:.2f} bps")
+
+        best_ls_spread_bps = -9999
+        for h in horizons:
+            score_col = f'xgb_score_t{h}'
+            target_col = f'fwd_ret_t{h}'
             
-        ls_ret = group_returns.get(5, 0) - group_returns.get(1, 0)
-        log.info(f"WFO Long-Short Spread (Q5-Q1): {ls_ret:.2f} bps/day")
+            if score_col not in oos_df.columns or target_col not in oos_df.columns:
+                continue
+                
+            oos_df[f'quantile_t{h}'] = oos_df.groupby('date').apply(lambda g: _group_pred_col(g, score_col)).reset_index(0, drop=True)
+            
+            # Evaluate using the proper horizon target
+            group_returns = oos_df.groupby(f'quantile_t{h}')[target_col].mean() * 10000 # bps
+            
+            log.info(f"\n--- WFO Out-of-Sample Mean Return by Quantile for Horizon T+{h} (bps) ---")
+            for q in [1, 2, 3, 4, 5]:
+                ret = group_returns.get(q, 0)
+                log.info(f"  Q{q}: {ret:.2f} bps")
+                
+            ls_ret = group_returns.get(5, 0) - group_returns.get(1, 0)
+            
+            # Calculate annualized spread
+            # Since the return is over H days, we divide by H to get daily average spread
+            daily_ls_ret = ls_ret / h
+            ann_ls_ret = daily_ls_ret * 252
+            
+            log.info(f"  Long-Short Spread (Q5-Q1): {ls_ret:.2f} bps per holding period")
+            log.info(f"  Daily Avg L-S Spread: {daily_ls_ret:.2f} bps/day")
+            log.info(f"  Annualized L-S Spread: {ann_ls_ret / 100:.2f}%")
+            
+            if h == 20: # Use T+20 as the anchor metric because short-term models are noisy
+                best_ls_spread_bps = daily_ls_ret
+        
+        # Save metrics for Auto-Gate
+        metrics = {
+            "wfo_ls_spread_bps": float(best_ls_spread_bps),
+            "timestamp": datetime.now().isoformat()
+        }
+        with open('.quantbot_data/eval_metrics.json', 'w') as f:
+            import json
+            json.dump(metrics, f)
+            
     def evaluate(self, panel, factor_name):
         """Evaluate a specific factor."""
         log.info(f"--- Evaluating Factor: {factor_name} ---")
@@ -306,7 +330,7 @@ class SandboxEvaluator:
             except:
                 return pd.Series(index=group.index, dtype=float)
                 
-        eval_df['quantile'] = eval_df.groupby('date').apply(_group_factor).reset_index(level=0, drop=True)
+        eval_df['quantile'] = eval_df.groupby('date').apply(_group_factor, include_groups=False).reset_index('date', drop=True)
         
         eval_df = eval_df.dropna(subset=['quantile'])
         

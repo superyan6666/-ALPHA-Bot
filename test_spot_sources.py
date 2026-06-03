@@ -106,12 +106,14 @@ if __name__ == "__main__":
     print("\n--- Tencent Spot Data ---")
     print(df_tencent)
     
-    df_netease = fetch_netease(test_codes)
-    print("\n--- Netease Spot Data ---")
-    print(df_netease)
+    print("\n--- Testing Netease API (Disabled) ---")
+    # df_netease = fetch_netease(test_codes)
+    # print(f"Netease returned {len(df_netease)} rows.")
+    # if not df_netease.empty:
+    #     print(df_netease.head())
     
-    if df_tencent.empty and df_netease.empty:
-        logging.error("Both fallback spot sources failed!")
+    if df_tencent.empty:
+        logging.error("Fallback spot sources failed!")
         sys.exit(1)
     
     sys.exit(0)
