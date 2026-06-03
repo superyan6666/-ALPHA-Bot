@@ -86,8 +86,8 @@ def build_data_lake(output_dir=".quantbot_data", max_stocks=None):
     if all_data:
         logging.info("开始合并全市场数据...")
         final_df = pd.concat(all_data, ignore_index=True)
-        # 优化数据类型以减小存储体积
-        final_df['date'] = pd.to_datetime(final_df['date'])
+        final_df['date'] = pd.to_datetime(final_df['date']).dt.normalize()
+        final_df = final_df.drop_duplicates(subset=['date', 'code'], keep='last') # [B2 Fix] 强制清洗 duplicated 防止 pivot 崩溃
         for col in ['open', 'high', 'low', 'close', 'volume', 'amount', 'turn', 'pctChg']:
             final_df[col] = pd.to_numeric(final_df[col], errors='coerce').astype('float32')
         for col in ['tradestatus', 'isST']:

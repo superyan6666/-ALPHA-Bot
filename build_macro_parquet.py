@@ -38,8 +38,9 @@ def build_macro_features(start_date='2019-01-01', end_date=None):
             
         cn_df = cn_df[['日期', col_10y]]
         cn_df.rename(columns={'日期': 'date', col_10y: 'cn_10y'}, inplace=True)
-        cn_df['date'] = pd.to_datetime(cn_df['date'])
+        cn_df['date'] = pd.to_datetime(cn_df['date']).dt.normalize()
         cn_df.set_index('date', inplace=True)
+        cn_df = cn_df[~cn_df.index.duplicated(keep='last')] # [B2 Fix] 强制清洗 duplicated 防止静默引发笛卡尔积膨胀
         cn_df['cn_10y'] = cn_df['cn_10y'].astype(float)
     except Exception as e:
         logging.error(f"Failed to fetch ChinaBond from akshare: {e}")
