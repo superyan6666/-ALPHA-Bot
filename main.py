@@ -1,4 +1,9 @@
 import os
+# --- B7 强制防御：绕过失效的本地代理 (如 Clash 10808)，防止单点脆弱 ---
+for k in ['HTTP_PROXY', 'HTTPS_PROXY', 'http_proxy', 'https_proxy', 'ALL_PROXY', 'all_proxy']:
+    os.environ.pop(k, None)
+os.environ['NO_PROXY'] = '*'
+
 import time
 import json
 import socket
@@ -24,6 +29,7 @@ import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed, TimeoutError as FuturesTimeoutError
 
 _GLOBAL_SEMAPHORE = threading.Semaphore(2)
+_BS_LOCK = threading.Lock()
 _CONSECUTIVE_FAILURES = 0
 _MAX_FAILURES = 10
 
@@ -598,40 +604,43 @@ class DataProxy:
 
     def _fetch_hist_baostock(self, code, start, end):
         if bs is None: return None
-        self._login_baostock()
-        try:
-            prefix = 'sh.' if code.startswith('6') else 'sz.'
-            start_fmt = f"{start[:4]}-{start[4:6]}-{start[6:]}"
-            end_fmt = f"{end[:4]}-{end[4:6]}-{end[6:]}"
-            
-            rs = bs.query_history_k_data_plus(
-                prefix + code,
-                "date,open,close,high,low,volume,amount",
-                start_date=start_fmt, end_date=end_fmt,
-                frequency="d", adjustflag="2"
-            )
-            
-            if rs is None or rs.error_code != '0':
-                return None
+        with _BS_LOCK:
+            self._login_baostock()
+            try:
+                prefix = 'sh.' if code.startswith('6') else 'sz.'
+                start_fmt = f"{start[:4]}-{start[4:6]}-{start[6:]}"
+                end_fmt = f"{end[:4]}-{end[4:6]}-{end[6:]}"
                 
-            data_list = []
-            while (rs.error_code == '0') & rs.next():
-                data_list.append(rs.get_row_data())
-            if not data_list: return None
-            
-            df = pd.DataFrame(data_list, columns=rs.fields)
-            df = df.rename(columns={'date': C.H_DATE, 'open': C.H_OPEN, 'close': C.H_CLOSE, 'high': C.H_HIGH, 'low': C.H_LOW, 'volume': C.H_VOL})
-            for col in [C.H_OPEN, C.H_CLOSE, C.H_HIGH, C.H_LOW, C.H_VOL]:
-                df[col] = pd.to_numeric(df[col], errors='coerce')
-            return df[list(Config.HIST_COLS)]
-        except Exception as e:
-            log.debug(f"[Tier 1 BaoStock] 获取历史失败: {e}")
-            return None
+                rs = bs.query_history_k_data_plus(
+                    prefix + code,
+                    "date,open,close,high,low,volume,amount",
+                    start_date=start_fmt, end_date=end_fmt,
+                    frequency="d", adjustflag="2"
+                )
+                
+                if rs is None or rs.error_code != '0':
+                    return None
+                    
+                data_list = []
+                while (rs.error_code == '0') & rs.next():
+                    data_list.append(rs.get_row_data())
+                if not data_list: return None
+                
+                df = pd.DataFrame(data_list, columns=rs.fields)
+                df = df.rename(columns={'date': C.H_DATE, 'open': C.H_OPEN, 'close': C.H_CLOSE, 'high': C.H_HIGH, 'low': C.H_LOW, 'volume': C.H_VOL})
+                for col in [C.H_OPEN, C.H_CLOSE, C.H_HIGH, C.H_LOW, C.H_VOL]:
+                    df[col] = pd.to_numeric(df[col], errors='coerce')
+                return df[list(Config.HIST_COLS)]
+            except Exception as e:
+                log.debug(f"[Tier 1 BaoStock] 获取历史失败: {e}")
+                return None
 
     def _fetch_hist_akshare(self, code, start, end):
         global _CONSECUTIVE_FAILURES
         if _CONSECUTIVE_FAILURES >= _MAX_FAILURES:
-            log.error(f"🔥 [RateLimit_CIRCUIT] 连续 {_CONSECUTIVE_FAILURES} 次获取历史失败，熔断机制触发，拒绝更多请求。")
+            log.error(f"🔥 [RateLimit_CIRCUIT] 连续 {_CONSECUTIVE_FAILURES} 次获取历史失败，熔断机制触发，冷却10秒后重置。")
+            time.sleep(10)
+            _CONSECUTIVE_FAILURES = 0
             return None
         for attempt in range(3):
             with _GLOBAL_SEMAPHORE:
@@ -2123,6 +2132,10 @@ def get_signals() -> tuple[list[Signal], list, set, int, str, int]:
     # Extract today's cross section
     today_str = now.strftime('%Y-%m-%d')
     today_panel = panel[panel['date'] == pd.to_datetime(today_str)].copy()
+    if len(today_panel) == 0:
+        latest_date = panel['date'].max()
+        log.warning(f"⚠️ 今日 ({today_str}) 行情尚未落库，使用最新可用日期 ({latest_date.strftime('%Y-%m-%d')}) 作为截面。")
+        today_panel = panel[panel['date'] == latest_date].copy()
     
     # Load Models and Predict
     horizons = [1, 5, 10, 20]
@@ -2143,9 +2156,9 @@ def get_signals() -> tuple[list[Signal], list, set, int, str, int]:
         ltr = PyTorchDLModel(input_dim=len(features))
         ltr.load_model(model_path)
         
-        if feature_success:
+        if feature_success and len(today_panel) > 0:
             xgb_preds = ltr.predict(today_panel, features)
-            if np.isnan(xgb_preds).all():
+            if len(xgb_preds) > 0 and np.isnan(xgb_preds).all():
                 log.critical(f"🚨 致命错误：T+{h} DL输出全部NaN！")
                 today_panel[f'xgb_score_t{h}'] = 0.5
             else:

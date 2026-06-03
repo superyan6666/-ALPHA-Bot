@@ -37,7 +37,7 @@ class PyTorchDLModel:
         df_train = df_train.dropna(subset=[target_col]).copy()
         
         # [B7 Fix] Impute feature NaNs with 0 to match test-time predict() behavior
-        df_train[feature_cols] = df_train[feature_cols].fillna(0)
+        df_train[feature_cols] = df_train[feature_cols].replace([np.inf, -np.inf], np.nan).fillna(0)
         
         # [B7 Fix] Cross-sectional Target Rank Normalization
         # Force the model to learn relative Alpha rankings rather than absolute market Beta.
@@ -65,7 +65,7 @@ class PyTorchDLModel:
         return self.model
         
     def predict(self, df_test, feature_cols):
-        X_test = torch.tensor(df_test[feature_cols].fillna(0).values, dtype=torch.float32).to(self.device)
+        X_test = torch.tensor(df_test[feature_cols].replace([np.inf, -np.inf], np.nan).fillna(0).values, dtype=torch.float32).to(self.device)
         self.model.eval()
         with torch.no_grad():
             preds = self.model(X_test).cpu().numpy().flatten()
@@ -243,7 +243,7 @@ class XGBoostLTR:
         return self.model
         
     def predict(self, df_test, feature_cols):
-        X_test = df_test[feature_cols].fillna(0)
+        X_test = df_test[feature_cols].replace([np.inf, -np.inf], np.nan).fillna(0)
         return self.model.predict(X_test)
         
     def save_model(self, filepath: str):
