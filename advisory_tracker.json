@@ -1,0 +1,34 @@
+{
+  "300035": {
+    "name": "中科电气",
+    "entry_date": "2026-06-03",
+    "target": 20.64,
+    "stop": 14.82,
+    "horizon": "T+10",
+    "max_days": 20
+  },
+  "301327": {
+    "name": "华宝新能",
+    "entry_date": "2026-06-03",
+    "target": 67.5,
+    "stop": 51.09,
+    "horizon": "T+10",
+    "max_days": 20
+  },
+  "002941": {
+    "name": "新疆交建",
+    "entry_date": "2026-06-03",
+    "target": 12.92,
+    "stop": 11.18,
+    "horizon": "T+10",
+    "max_days": 20
+  },
+  "002572": {
+    "name": "索菲亚",
+    "entry_date": "2026-06-03",
+    "target": 9.58,
+    "stop": 8.41,
+    "horizon": "T+10",
+    "max_days": 20
+  }
+}
