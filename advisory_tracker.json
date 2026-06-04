@@ -1,9 +1,9 @@
 {
   "300035": {
     "name": "中科电气",
-    "entry_date": "2026-06-03",
-    "target": 20.64,
-    "stop": 14.82,
+    "entry_date": "2026-06-04",
+    "target": 19.67,
+    "stop": 14.57,
     "horizon": "T+10",
     "max_days": 20
   },
@@ -33,9 +33,33 @@
   },
   "300724": {
     "name": "捷佳伟创",
-    "entry_date": "2026-06-03",
-    "target": 91.47,
-    "stop": 66.48,
+    "entry_date": "2026-06-04",
+    "target": 92.42,
+    "stop": 68.36,
+    "horizon": "T+10",
+    "max_days": 20
+  },
+  "600299": {
+    "name": "安迪苏",
+    "entry_date": "2026-06-04",
+    "target": 12.45,
+    "stop": 9.51,
+    "horizon": "T+10",
+    "max_days": 20
+  },
+  "300017": {
+    "name": "网宿科技",
+    "entry_date": "2026-06-04",
+    "target": 19.2,
+    "stop": 13.62,
+    "horizon": "T+10",
+    "max_days": 20
+  },
+  "300101": {
+    "name": "振芯科技",
+    "entry_date": "2026-06-04",
+    "target": 19.99,
+    "stop": 15.13,
     "horizon": "T+10",
     "max_days": 20
   }
