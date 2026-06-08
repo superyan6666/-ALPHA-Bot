@@ -455,12 +455,7 @@ def format_money_risk_msg(price: float, stop_loss: float, target1: float) -> str
     else:
         evaluation = "⚠️ **需谨慎**：操作要求高，务必**减半仓位**！"
     
-    return (
-        f"- 💸 **建仓成本参考**：若买 {hands} 手约需资金占用 `¥{total_cost:.0f}` (按1万预算计)\n"
-        f"- 🔴 **下行风险参考**：至止损位的最大回撤预估约 `-¥{total_loss:.0f}`\n"
-        f"- 🟢 **上行空间参考**：第一波段预期获利 `+¥{gain_1:.0f}`\n"
-        f"- 📐 **理论盈亏比**：`1 : {ratio_str}` ➡️ {evaluation}"
-    )
+    return f"- ⚖️ **盈亏预估**：{hands}手约 `¥{total_cost:.0f}` | 盈亏比 `1:{ratio_str}` ({evaluation}) | 潜在回撤 `-¥{total_loss:.0f}` | 预期 `+¥{gain_1:.0f}`"
 
 def generate_tranche_plan(price: float, score: int, market_ok: bool, market_overheated: bool) -> str:
     if market_overheated:
@@ -479,21 +474,13 @@ def generate_tranche_plan(price: float, score: int, market_ok: bool, market_over
     add_price   = round(price * 1.025, 2)
     stop_add    = round(price * 1.05,  2)
     
-    return (
-        f"- **① 关注支撑**：次日重点观察 `¥{lower_bound} - ¥{upper_bound}` 区间，若决定建仓可考虑分配 **{t1}%** 仓位试错。\n"
-        f"- **② 稳健加仓**：若后续确认上攻站稳 `¥{add_price}`，可考虑增加 **{t2}%** 配置。\n"
-        f"- **③ 趋势跟随**：若突破形态上沿 `¥{stop_add}`，建议保留 **{t3}%** 资金应对或做跟随确认。"
-    )
+    return f"- 🎯 **分批建仓**：支撑区 `¥{lower_bound}-¥{upper_bound}`({t1}%) ➡️ 站稳 `¥{add_price}`({t2}%) ➡️ 突破 `¥{stop_add}`({t3}%)"
 
 def generate_plan_b(price: float, stop_loss: float, ma20: float) -> str:
     normal_shake = round(price * 0.97, 2)  
     normal_shake = max(normal_shake, stop_loss + 0.01)
     
-    return (
-        f"- **📉 正常波动**：只要收盘未破 `¥{normal_shake:.2f}`，属于正常洗盘震荡。\n"
-        f"- **🔪 防守红线**：一旦有效跌破 `¥{stop_loss:.2f}`，说明上涨逻辑可能证伪，**强烈建议执行止损保护本金！**\n"
-        f"- **💥 系统风险**：若遇大盘单日非理性暴跌，请优先考虑系统性风险规避。"
-    )
+    return f"- 🛡️ **防守红线**：未破 `¥{normal_shake:.2f}` 为正常洗盘；若有效跌破 `¥{stop_loss:.2f}`，**必须无条件止损**。"
 
 def generate_hold_period(adx: float, price_pct: float, has_chip_break: bool) -> str:
     if price_pct < 0.35 and adx < 20:
