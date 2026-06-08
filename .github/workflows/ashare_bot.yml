@@ -27,7 +27,7 @@ permissions:
 
 jobs:
   run-bot:
-    runs-on: self-hosted
+    runs-on: ubuntu-latest
     
     # 强行熔断时间：30分钟。给极端的网络波动和备用源优雅降级留下绝对充足的时间
     timeout-minutes: 30
