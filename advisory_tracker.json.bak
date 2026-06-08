@@ -1,0 +1,34 @@
+{
+  "600808": {
+    "name": "马钢股份",
+    "entry_date": "2026-06-01",
+    "target": 3.58,
+    "stop": 2.68,
+    "horizon": "T+10",
+    "max_days": 20
+  },
+  "002588": {
+    "name": "史丹利",
+    "entry_date": "2026-06-01",
+    "target": 10.78,
+    "stop": 8.53,
+    "horizon": "T+10",
+    "max_days": 20
+  },
+  "002572": {
+    "name": "索菲亚",
+    "entry_date": "2026-06-01",
+    "target": 11.14,
+    "stop": 8.56,
+    "horizon": "T+10",
+    "max_days": 20
+  },
+  "603393": {
+    "name": "新天然气",
+    "entry_date": "2026-06-01",
+    "target": 34.48,
+    "stop": 24.46,
+    "horizon": "T+10",
+    "max_days": 20
+  }
+}
