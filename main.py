@@ -78,7 +78,7 @@ class AppConfig:
         if key not in self._env:
             if default is not None:
                 # 在 config 初始化阶段 logger 可能尚未 setup，暂时 print 或者等后续再 log
-                print(f"⚠️ [Config] 环境变量缺失 '{key}'，将使用默认值: {default}")
+                print(f"[Config Warning] Missing '{key}', using default: {default}")
             return default
         return self._env[key]
 
@@ -1374,6 +1374,7 @@ class AShareTechnicals:
             'has_pullback': has_pullback,
             'has_chip_break': has_chip_break,
             'dist_ma20': (today[C.H_CLOSE] / today['MA20'] - 1) * 100,
+            'dist_ma60': (today[C.H_CLOSE] / today['MA60'] - 1) * 100 if 'MA60' in today and today['MA60'] > 0 else 0.0,
             'red_days': red_days,
             'rsi': rsi,
             'consecutive_down': consecutive_down,
@@ -1590,8 +1591,8 @@ def process_stock(row: pd.Series, raw_hist: pd.DataFrame, now: datetime, market_
     data['in_hot_sector'] = data['code'] in hot_sectors_map
     data['hot_sector_name'] = hot_sectors_map.get(data['code'], "热门")
     
-    atr_stop = data['close_val'] - 2.0 * data['atr_val']
-    stop = max(atr_stop, row[C.S_PRICE] * 0.88)
+    atr_stop = data['close_val'] - 1.5 * data['atr_val']
+    stop = atr_stop
     stop = round(stop, 2)
     
     risk_pct = ((row[C.S_PRICE] - stop) / row[C.S_PRICE]) * 100 if row[C.S_PRICE] > 0 else 99
@@ -1889,9 +1890,9 @@ def send_dingtalk(signals: dict[str, list[Signal]], watchlist: list, total_pool:
     run_mode = config.RUN_MODE
     
     header = (
-        f"## 🤖 AI量化保姆级多维选股系统\n"
+        f"## 🤖 AI量化选股系统\n"
         f"> **{now_str}**\n>\n"
-        f"> ⚠️ **郑重声明**：本报告由量化模型自动生成，仅供技术交流与策略复盘，**绝不构成任何投资建议**。股市有风险，入市需谨慎，盈亏请自负。\n\n"
+        f"> ⚠️ **声明**：本报告由模型自动生成，仅供技术交流与复盘，**不构成投资建议**。\n\n"
     )
     if run_mode == 'market_only' or run_mode == 'morning':
         header = f"## 🤖 AI量化大盘深度体检\n> **{now_str}**\n\n"
@@ -1912,26 +1913,16 @@ def send_dingtalk(signals: dict[str, list[Signal]], watchlist: list, total_pool:
         content = header + "⚠️ 今日部分个股数据扫描因接口受限中断，已为您提供核心大盘分析参考。"
     elif not any(signals.values()) and not watchlist:
         if not PUSH_EMPTY: return
-        content = f"{header}✅ **机器体检结果**：今日未发现形态完全符合安全边际的标的，别乱买，建议**空仓防守**！"
+        content = f"{header}✅ **系统检测结果**：今日未发现形态完全符合安全边际的标的，建议**空仓防守**。"
     else:
         content = header
         has_any_signal = any(signals.values())
         
         if has_any_signal:
-            cold_gate = (
-                "> **🛑 投资前冷静自检（30秒）**\n"
-                "> 1. 这笔资金在 **3年内** 绝对不会急用？\n"
-                "> 2. 就算触发极值回撤 **亏掉30%** 也不会影响生活？\n"
-                "> 3. 能否严格遵守纪律，**不因短期下跌而恐慌操作**？\n"
-                "> \n"
-                "> *✅ 三项全对 ➡️ 可参考下方模型生成的信号*\n"
-                "> *❌ 有一项不对 ➡️ 强烈建议大幅缩减投入预算或保持空仓！*\n\n"
-                "---\n\n"
-            )
-            content += cold_gate
+            # Removed subjective cold gate
             
             def format_signal(s):
-                warn_msg = "> ⚡ **【风险警示】** 该股为创业板(波动±20%)，心脏不好请务必**缩减仓位**！\n\n" if str(s.code).startswith('300') else ""
+                warn_msg = "> ⚡ **【风险警示】** 该股为创业板(波动±20%)，请务必**缩减仓位**。\n\n" if str(s.code).startswith('300') else ""
                 prefix = '1' if str(s.code).startswith('6') else '0'
                 tdx_market = 'SH' if str(s.code).startswith('6') else 'SZ' 
                 
@@ -1949,8 +1940,8 @@ def send_dingtalk(signals: dict[str, list[Signal]], watchlist: list, total_pool:
                     f"- **综合评级**：`{s.score}` 分 {s.level}\n"
                     f"- **今日收盘**：`¥{s.price}` ({s.pct_chg})\n\n"
                     f"[📈 点击查看大周期周K线图]({kline_url})\n\n"
-                    f"**💡 为什么机器选出它？**\n{s.reasons}\n\n"
-                    f"**🛡️ 小白专属操作剧本**\n"
+                    f"**💡 核心逻辑**\n{s.reasons}\n\n"
+                    f"**🛡️ 操作策略参考**\n"
                     f"{s.hold_period_msg}\n"
                     f"{s.money_risk_msg}\n\n"
                     f"{s.tranche_plan_msg}\n\n"
@@ -1983,11 +1974,7 @@ def send_dingtalk(signals: dict[str, list[Signal]], watchlist: list, total_pool:
                 f"*注：以上标的评级不足 70 分，系统判断波动或风险偏大，暂不提供操作剧本。待其评级升至发车线后再考虑介入。*"
             )
         
-        content += (
-            "\n\n---\n### 🤔 每日灵魂拷问\n"
-            "如果明天买入的股票跌了 5%，我会焦虑得睡不着觉吗？\n\n"
-            "> **如果会，请把你准备买入的金额【再砍掉一半】！投资是为了生活更好，不是花钱找罪受。**"
-        )
+        pass # Removed subjective reflection
         
     NotificationGateway.send('🤖 AI量化盘后提醒', content)
 
@@ -2047,9 +2034,9 @@ def get_signals() -> tuple[list[Signal], list, set, int, str, int]:
     is_fallback = ((df_clean[C.S_PE] == -1.0).sum() > len(df_clean) * 0.9) or is_t1_fallback
     is_etf = df_clean[C.S_CODE].astype(str).str.startswith(('51', '15', '588', '56'))
     
-    # 大幅度放宽基本面初筛，避免将优质技术面信号盲目过滤。基本面优劣将交给后续因子打分阶段细粒度评估。
-    pe_cond = (df_clean[C.S_PE] > c_conf.MIN_PE) | (df_clean[C.S_PE].isna()) | (df_clean[C.S_PE] <= 0) | is_fallback | is_etf
-    pb_cond = (df_clean[C.S_PB].between(-5.0, 50.0)) | (df_clean[C.S_PB].isna()) | is_etf
+    # 严格基本面初筛，切断亏损股和严重破净/高估股的入围路径
+    pe_cond = (df_clean[C.S_PE] > 0) | (df_clean[C.S_PE].isna()) | is_fallback | is_etf
+    pb_cond = (df_clean[C.S_PB].between(0.1, 20.0)) | (df_clean[C.S_PB].isna()) | is_etf
     
     stock_mask = (df_clean[C.S_MCAP].between(c_conf.MIN_CAP, c_conf.MAX_CAP) | df_clean[C.S_MCAP].isna()) & \
                  (df_clean[C.S_TURN].between(c_conf.MIN_TURNOVER, c_conf.MAX_TURNOVER) | df_clean[C.S_TURN].isna()) & \
@@ -2184,8 +2171,8 @@ def get_signals() -> tuple[list[Signal], list, set, int, str, int]:
     # Filter A: T+1 Anti-Chasing (rank_t1 < 0.95)
     candidates = candidates[candidates['rank_t1'] < 0.95]
     
-    # Filter B: T+5 Anti-Bleeding (rank_t5 > 0.10)
-    candidates = candidates[candidates['rank_t5'] > 0.10]
+    # Filter B: T+5 Anti-Bleeding (rank_t5 > 0.40)
+    candidates = candidates[candidates['rank_t5'] > 0.40]
     
     # Sort and pick top K
     candidates = candidates.sort_values('core_rank', ascending=False).head(5)
