@@ -1756,9 +1756,7 @@ def extract_market_context(df_raw: pd.DataFrame, c_conf: Config) -> tuple[pd.Dat
             market_ok = True
             market_state += " 🚀(外资抢筹)"
 
-        fallback_warning = ""
-        if C.S_PE in df_raw.columns and (df_raw[C.S_PE] == -1.0).sum() > len(df_raw) * 0.9: 
-            fallback_warning = "\n\n> ⚠️ **数据源降级警报**\n> 频繁测试触发东方财富接口临时限制，已切至新浪备用源。基本面过滤(市盈率/量比等)暂时失效，请自行排雷！"
+        fallback_warning = "\n\n> ⚠️ **数据源降级警报**\n> 频繁测试触发东方财富接口临时限制，已切至新浪备用源。基本面过滤(市盈率/量比等)暂时失效，请自行排雷！"
 
         # Use get_ma_trend for CSI 300 or SH000001
         trend_name, trend_desc = get_ma_trend(cl)
@@ -1889,11 +1887,7 @@ def send_dingtalk(signals: dict[str, list[Signal]], watchlist: list, total_pool:
     now_str = now_ts.strftime('%Y-%m-%d %H:%M')
     run_mode = config.RUN_MODE
     
-    header = (
-        f"## 🤖 AI量化选股系统\n"
-        f"> **{now_str}**\n>\n"
-        f"> ⚠️ **声明**：本报告由模型自动生成，仅供技术交流与复盘，**不构成投资建议**。\n\n"
-    )
+    header = f"## 🤖 AI量化选股系统\n> **{now_str}**\n\n"
     if run_mode == 'market_only' or run_mode == 'morning':
         header = f"## 🤖 AI量化大盘深度体检\n> **{now_str}**\n\n"
     elif run_mode not in ('market_only', 'morning') and total_market > 0:
@@ -1938,20 +1932,14 @@ def send_dingtalk(signals: dict[str, list[Signal]], watchlist: list, total_pool:
                     f"#### 🎯 {s.name} (`{s.code}`)\n"
                     f"{warn_msg}"
                     f"- **综合评级**：`{s.score}` 分 {s.level}\n"
-                    f"- **今日收盘**：`¥{s.price}` ({s.pct_chg})\n\n"
-                    f"[📈 点击查看大周期周K线图]({kline_url})\n\n"
+                    f"- **今日收盘**：`¥{s.price}` ({s.pct_chg}) [📈 周K图]({kline_url})\n\n"
                     f"**💡 核心逻辑**\n{s.reasons}\n\n"
-                    f"**🛡️ 操作策略参考**\n"
-                    f"{s.hold_period_msg}\n"
-                    f"{s.money_risk_msg}\n\n"
-                    f"{s.tranche_plan_msg}\n\n"
-                    f"{s.plan_b_msg}\n\n"
-                    f"> **风控与操作参考 (V11.0 吊灯模型)**\n"
-                    f"> 🛡️ **防震仓锁 (T+5)**：若建仓，前 5 个交易日内未跌破防守线 `¥{s.stop_loss}` 时，通常属于正常洗盘震荡。\n"
-                    f"> 🎯 **动态止盈参考**：若创出新高，可考虑以最高价回撤 2.5~3 倍 ATR 作为动态离场线参考。\n"
-                    f"> 🚫 **追高风险**：若明日开盘直接高开 **> 4%**，说明资金抢跑，追高风险较大，建议放弃。\n\n"
-                    f"[🔗 点击跳转东方财富 App 查阅详情](https://quote.eastmoney.com/unify/r/{prefix}.{s.code})\n\n"
-                    f"*📌 通达信看盘助手：复制代码 `{s.code}` 后打开通达信 App 即可*"
+                    f"**🛡️ 交易计划**\n"
+                    f"{s.money_risk_msg}\n"
+                    f"{s.tranche_plan_msg}\n"
+                    f"{s.plan_b_msg}\n"
+                    f"> ⚠️ 纪律: 破防守线 `¥{s.stop_loss}` 止损; 高开>4%放弃; 创新高按ATR止盈。\n\n"
+                    f"[🔗 东财App看盘](https://quote.eastmoney.com/unify/r/{prefix}.{s.code}) | 通达信: `{s.code}`"
                 )
 
             # --- Formatting Sections ---
