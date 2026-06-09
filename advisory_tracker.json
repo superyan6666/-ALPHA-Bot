@@ -1,0 +1,18 @@
+{
+  "000603": {
+    "name": "盛达资源",
+    "entry_date": "2026-06-09",
+    "target": 32.9,
+    "stop": 25.46,
+    "horizon": "T+10",
+    "max_days": 20
+  },
+  "300442": {
+    "name": "润泽科技",
+    "entry_date": "2026-06-09",
+    "target": 89.45,
+    "stop": 69.32,
+    "horizon": "T+10",
+    "max_days": 20
+  }
+}
