@@ -1556,6 +1556,29 @@ def process_stock(row: pd.Series, raw_hist: pd.DataFrame, now: datetime, market_
     if atr_pct > 8.0:
         return None
 
+    # [Right-Side Filter] 绝对右侧确认：过滤左侧接飞刀
+    ma5 = hist['MA5'].iloc[-1] if 'MA5' in hist.columns else hist[C.H_CLOSE].rolling(5).mean().iloc[-1]
+    close_today = hist[C.H_CLOSE].iloc[-1]
+    close_yest = hist[C.H_CLOSE].iloc[-2] if len(hist) >= 2 else close_today
+    close_2d_ago = hist[C.H_CLOSE].iloc[-3] if len(hist) >= 3 else close_yest
+    close_3d_ago = hist[C.H_CLOSE].iloc[-4] if len(hist) >= 4 else close_2d_ago
+    
+    # 1. 均线防守：必须站上 5 日均线
+    if close_today < ma5:
+        return None
+        
+    # 2. 拒绝连阴：过去3天重心向下，且今天未反包
+    is_3d_down = (close_yest < close_2d_ago) and (close_2d_ago < close_3d_ago)
+    if is_3d_down and (close_today <= close_yest):
+        return None
+        
+    # 3. MACD 走弱过滤：水下且未金叉则拒绝
+    macd = hist['MACD'].iloc[-1] if 'MACD' in hist.columns else 0
+    dif = hist['DIF'].iloc[-1] if 'DIF' in hist.columns else 0
+    dea = hist['DEA'].iloc[-1] if 'DEA' in hist.columns else 0
+    if macd < 0 and dif < dea:
+        return None
+
     data['pe'] = float(row.get(C.S_PE, 0))
     data['pb'] = float(row.get(C.S_PB, 0))
     data['mcap'] = float(row.get(C.S_MCAP, 0))
@@ -1732,7 +1755,15 @@ def extract_market_context(df_raw: pd.DataFrame, c_conf: Config) -> tuple[pd.Dat
             advice = "仓位 40%-60%。指数暂无大级别风险，重个股轻大盘，不盲目追高。"
             market_ok = True
             
-        if beta_broken:
+        vix_20d = cl.pct_change().std() * np.sqrt(252) * 100 if len(cl) >= 20 else vix_proxy
+        is_crashing = (cl.iloc[-1] < ma20) and (pct < -1.5) and (vix_20d > 20.0 or vix_proxy > 2.0)
+        
+        if is_crashing or (beta_broken and vol_surge and pct < -1.0):
+            advice = "🚨 **【大盘绝对熔断警报】** 大盘遭遇放量暴跌且波动率极速放大（典型主跌浪/股灾前兆）！系统已触发 Level 2 级别防守熔断，今日强制空仓，停止一切选股运算，绝不接飞刀！\n\n" + advice
+            # 如果大盘极度恶劣，直接返回空 DataFrame 熔断后续一切算股逻辑
+            return pd.DataFrame(), False, advice, index_ret, market_overheated, "PANIC", vol_surge
+            
+        elif beta_broken:
             advice = "🚨 **【大盘结构性走熊警告】** 大盘日线跌破 60 日均线且 MACD 死叉，处于绝对熊市结构！建议空仓或极低仓位试错，由于个股可能分化，今日仍推送高潜质标的供观察，但严禁盲目重仓做多！\n\n" + advice
 
         if north_flow <= -80.0:
