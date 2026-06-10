@@ -14,5 +14,37 @@
     "stop": 69.32,
     "horizon": "T+10",
     "max_days": 20
+  },
+  "301004": {
+    "name": "嘉益股份",
+    "entry_date": "2026-06-10",
+    "target": 42.52,
+    "stop": 34.27,
+    "horizon": "T+10",
+    "max_days": 20
+  },
+  "301571": {
+    "name": "国科天成",
+    "entry_date": "2026-06-10",
+    "target": 66.81,
+    "stop": 52.74,
+    "horizon": "T+10",
+    "max_days": 20
+  },
+  "300841": {
+    "name": "康华生物",
+    "entry_date": "2026-06-10",
+    "target": 50.02,
+    "stop": 42.4,
+    "horizon": "T+10",
+    "max_days": 20
+  },
+  "300573": {
+    "name": "兴齐眼药",
+    "entry_date": "2026-06-10",
+    "target": 40.22,
+    "stop": 33.71,
+    "horizon": "T+10",
+    "max_days": 20
   }
 }
