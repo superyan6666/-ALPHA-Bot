@@ -46,5 +46,13 @@
     "stop": 33.71,
     "horizon": "T+10",
     "max_days": 20
+  },
+  "600531": {
+    "name": "豫光金铅",
+    "entry_date": "2026-06-11",
+    "target": 13.86,
+    "stop": 10.92,
+    "horizon": "T+10",
+    "max_days": 20
   }
 }
