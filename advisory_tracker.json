@@ -23,14 +23,6 @@
     "horizon": "T+10",
     "max_days": 20
   },
-  "301571": {
-    "name": "国科天成",
-    "entry_date": "2026-06-10",
-    "target": 66.81,
-    "stop": 52.74,
-    "horizon": "T+10",
-    "max_days": 20
-  },
   "300841": {
     "name": "康华生物",
     "entry_date": "2026-06-10",
@@ -52,6 +44,38 @@
     "entry_date": "2026-06-11",
     "target": 13.86,
     "stop": 10.92,
+    "horizon": "T+10",
+    "max_days": 20
+  },
+  "605090": {
+    "name": "九丰能源",
+    "entry_date": "2026-06-12",
+    "target": 53.94,
+    "stop": 40.95,
+    "horizon": "T+10",
+    "max_days": 20
+  },
+  "300065": {
+    "name": "海兰信",
+    "entry_date": "2026-06-12",
+    "target": 25.05,
+    "stop": 15.3,
+    "horizon": "T+10",
+    "max_days": 20
+  },
+  "300401": {
+    "name": "花园生物",
+    "entry_date": "2026-06-12",
+    "target": 3.14,
+    "stop": 19.28,
+    "horizon": "T+10",
+    "max_days": 20
+  },
+  "002351": {
+    "name": "漫步者",
+    "entry_date": "2026-06-12",
+    "target": -83.66,
+    "stop": 57.25,
     "horizon": "T+10",
     "max_days": 20
   }
