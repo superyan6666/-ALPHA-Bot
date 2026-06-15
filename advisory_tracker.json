@@ -1,9 +1,9 @@
 {
   "000603": {
     "name": "盛达资源",
-    "entry_date": "2026-06-09",
-    "target": 32.9,
-    "stop": 25.46,
+    "entry_date": "2026-06-15",
+    "target": 52.03,
+    "stop": 28.25,
     "horizon": "T+10",
     "max_days": 20
   },
@@ -47,14 +47,6 @@
     "horizon": "T+10",
     "max_days": 20
   },
-  "605090": {
-    "name": "九丰能源",
-    "entry_date": "2026-06-12",
-    "target": 53.94,
-    "stop": 40.95,
-    "horizon": "T+10",
-    "max_days": 20
-  },
   "300065": {
     "name": "海兰信",
     "entry_date": "2026-06-12",
@@ -71,11 +63,35 @@
     "horizon": "T+10",
     "max_days": 20
   },
-  "002351": {
-    "name": "漫步者",
-    "entry_date": "2026-06-12",
-    "target": -83.66,
-    "stop": 57.25,
+  "600475": {
+    "name": "华光环能",
+    "entry_date": "2026-06-15",
+    "target": 17.88,
+    "stop": 13.89,
+    "horizon": "T+10",
+    "max_days": 20
+  },
+  "001233": {
+    "name": "海安集团",
+    "entry_date": "2026-06-15",
+    "target": 58.9,
+    "stop": 49.27,
+    "horizon": "T+10",
+    "max_days": 20
+  },
+  "603300": {
+    "name": "海南华铁",
+    "entry_date": "2026-06-15",
+    "target": 5.73,
+    "stop": 4.89,
+    "horizon": "T+10",
+    "max_days": 20
+  },
+  "301662": {
+    "name": "宏工科技",
+    "entry_date": "2026-06-15",
+    "target": 112.83,
+    "stop": 85.86,
     "horizon": "T+10",
     "max_days": 20
   }
