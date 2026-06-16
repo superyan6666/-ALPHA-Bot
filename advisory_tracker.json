@@ -1,12 +1,4 @@
 {
-  "000603": {
-    "name": "盛达资源",
-    "entry_date": "2026-06-15",
-    "target": 52.03,
-    "stop": 28.25,
-    "horizon": "T+10",
-    "max_days": 20
-  },
   "300442": {
     "name": "润泽科技",
     "entry_date": "2026-06-09",
@@ -92,6 +84,46 @@
     "entry_date": "2026-06-15",
     "target": 112.83,
     "stop": 85.86,
+    "horizon": "T+10",
+    "max_days": 20
+  },
+  "300113": {
+    "name": "顺网科技",
+    "entry_date": "2026-06-16",
+    "target": 22.78,
+    "stop": 18.88,
+    "horizon": "T+10",
+    "max_days": 20
+  },
+  "000537": {
+    "name": "绿发电力",
+    "entry_date": "2026-06-16",
+    "target": 10.5,
+    "stop": 7.83,
+    "horizon": "T+10",
+    "max_days": 20
+  },
+  "301291": {
+    "name": "明阳电气",
+    "entry_date": "2026-06-16",
+    "target": 52.99,
+    "stop": 39.97,
+    "horizon": "T+10",
+    "max_days": 20
+  },
+  "300763": {
+    "name": "锦浪科技",
+    "entry_date": "2026-06-16",
+    "target": 115.1,
+    "stop": 82.04,
+    "horizon": "T+10",
+    "max_days": 20
+  },
+  "600478": {
+    "name": "科力远",
+    "entry_date": "2026-06-16",
+    "target": 6.82,
+    "stop": 5.68,
     "horizon": "T+10",
     "max_days": 20
   }
