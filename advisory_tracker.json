@@ -89,9 +89,9 @@
   },
   "300113": {
     "name": "顺网科技",
-    "entry_date": "2026-06-16",
-    "target": 22.78,
-    "stop": 18.88,
+    "entry_date": "2026-06-17",
+    "target": 22.46,
+    "stop": 18.62,
     "horizon": "T+10",
     "max_days": 20
   },
@@ -124,6 +124,14 @@
     "entry_date": "2026-06-16",
     "target": 6.82,
     "stop": 5.68,
+    "horizon": "T+10",
+    "max_days": 20
+  },
+  "300047": {
+    "name": "天源迪科",
+    "entry_date": "2026-06-17",
+    "target": 11.35,
+    "stop": 9.19,
     "horizon": "T+10",
     "max_days": 20
   }
