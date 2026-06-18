@@ -63,14 +63,6 @@
     "horizon": "T+10",
     "max_days": 20
   },
-  "001233": {
-    "name": "海安集团",
-    "entry_date": "2026-06-15",
-    "target": 58.9,
-    "stop": 49.27,
-    "horizon": "T+10",
-    "max_days": 20
-  },
   "603300": {
     "name": "海南华铁",
     "entry_date": "2026-06-15",
@@ -119,19 +111,27 @@
     "horizon": "T+10",
     "max_days": 20
   },
-  "600478": {
-    "name": "科力远",
-    "entry_date": "2026-06-16",
-    "target": 6.82,
-    "stop": 5.68,
-    "horizon": "T+10",
-    "max_days": 20
-  },
   "300047": {
     "name": "天源迪科",
     "entry_date": "2026-06-17",
     "target": 11.35,
     "stop": 9.19,
+    "horizon": "T+10",
+    "max_days": 20
+  },
+  "000917": {
+    "name": "电广传媒",
+    "entry_date": "2026-06-18",
+    "target": 8.12,
+    "stop": 6.53,
+    "horizon": "T+10",
+    "max_days": 20
+  },
+  "600316": {
+    "name": "洪都航空",
+    "entry_date": "2026-06-18",
+    "target": 31.14,
+    "stop": 26.46,
     "horizon": "T+10",
     "max_days": 20
   }
