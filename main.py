@@ -1984,12 +1984,12 @@ def send_dingtalk(signals: dict[str, list[Signal]], watchlist: list, total_pool:
         
     NotificationGateway.send('🤖 AI量化盘后提醒', content)
 
-def get_signals() -> tuple[list[Signal], list, set, int, str, int]:
+def get_signals() -> tuple[dict[str, list[Signal]], list, dict, int, str, int]:
     now = datetime.now(TZ_BJS)
     
     log.info('🚀 防呆长线安全级·盘后复盘引擎启动...')
     if not IS_MANUAL and not is_valid_run_time(now): 
-        return [], [], set(), 0, "", 0
+        return {}, [], {}, 0, "", 0
 
     pushed = load_pushed_state() 
 
@@ -1997,7 +1997,7 @@ def get_signals() -> tuple[list[Signal], list, set, int, str, int]:
         df_raw = fetch_spot()
     except Exception as e:
         log.error(f"❌ 核心横截面行情获取失败: {e}")
-        return [], [], pushed, 0, f"⚠️ **行情接口异常，体检中断**: {e}", 0
+        return {}, [], pushed, 0, f"⚠️ **行情接口异常，体检中断**: {e}", 0
 
     c_conf = Config()
     df_clean, m_ok, m_msg, idx_ret, m_overheated, m_regime, vol_surge = extract_market_context(df_raw, c_conf)
@@ -2011,13 +2011,13 @@ def get_signals() -> tuple[list[Signal], list, set, int, str, int]:
 
     if config.RUN_MODE in ('market_only', 'morning'):
         log.info(f"🤖 [{config.RUN_MODE}模式] 完毕，退出个股运算。")
-        return [], [], pushed, 0, m_msg, len(df_raw)
+        return {}, [], pushed, 0, m_msg, len(df_raw)
 
 
     hot_sectors_map = fetch_hot_sectors()
 
     if df_clean.empty:
-        return [], [], pushed, 0, m_msg, 0
+        return {}, [], pushed, 0, m_msg, 0
 
     # 统一标准化股票代码为 6 位数字符串，剥离可能存在的市场前缀(如 sh/sz/bj)与后缀(如 .SH/.SZ)
     df_clean[C.S_CODE] = df_clean[C.S_CODE].astype(str).str.extract(r'(\d{6})')[0].fillna('').str.zfill(6)
@@ -2061,7 +2061,7 @@ def get_signals() -> tuple[list[Signal], list, set, int, str, int]:
     recent_pushed_codes = {str(c) for c in df_clean[C.S_CODE] if is_recently_pushed(str(c), pushed)}
     pool = df_clean[mask].pipe(lambda d: d[~d[C.S_CODE].isin(recent_pushed_codes)]).copy()
     
-    if pool.empty: return [], [], pushed, len(df_clean), m_msg, len(df_clean)
+    if pool.empty: return {}, [], pushed, len(df_clean), m_msg, len(df_clean)
     
     if len(pool) > 200:
         log.info(f"💡 触发防爆流截断，基于 Spot 截面数据执行廉价预筛分，保留前 200 只高潜标的参与决选。")
@@ -2112,7 +2112,7 @@ def get_signals() -> tuple[list[Signal], list, set, int, str, int]:
         ex2.shutdown(wait=False, cancel_futures=True)
 
     if not all_hists:
-        return [], [], pushed, len(pool), m_msg, len(df_clean)
+        return {}, [], pushed, len(pool), m_msg, len(df_clean)
 
     # ML Feature Engineering
     panel = pd.concat(all_hists, ignore_index=True)
