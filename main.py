@@ -1989,7 +1989,7 @@ def get_signals() -> tuple[list[Signal], list, set, int, str, int]:
     
     log.info('🚀 防呆长线安全级·盘后复盘引擎启动...')
     if not IS_MANUAL and not is_valid_run_time(now): 
-        return [], [], set(), 0, "", 0
+        return {}, [], set(), 0, "", 0
 
     pushed = load_pushed_state() 
 
@@ -1997,7 +1997,7 @@ def get_signals() -> tuple[list[Signal], list, set, int, str, int]:
         df_raw = fetch_spot()
     except Exception as e:
         log.error(f"❌ 核心横截面行情获取失败: {e}")
-        return [], [], pushed, 0, f"⚠️ **行情接口异常，体检中断**: {e}", 0
+        return {}, [], pushed, 0, f"⚠️ **行情接口异常，体检中断**: {e}", 0
 
     c_conf = Config()
     df_clean, m_ok, m_msg, idx_ret, m_overheated, m_regime, vol_surge = extract_market_context(df_raw, c_conf)
@@ -2011,13 +2011,13 @@ def get_signals() -> tuple[list[Signal], list, set, int, str, int]:
 
     if config.RUN_MODE in ('market_only', 'morning'):
         log.info(f"🤖 [{config.RUN_MODE}模式] 完毕，退出个股运算。")
-        return [], [], pushed, 0, m_msg, len(df_raw)
+        return {}, [], pushed, 0, m_msg, len(df_raw)
 
 
     hot_sectors_map = fetch_hot_sectors()
 
     if df_clean.empty:
-        return [], [], pushed, 0, m_msg, 0
+        return {}, [], pushed, 0, m_msg, 0
 
     # 统一标准化股票代码为 6 位数字符串，剥离可能存在的市场前缀(如 sh/sz/bj)与后缀(如 .SH/.SZ)
     df_clean[C.S_CODE] = df_clean[C.S_CODE].astype(str).str.extract(r'(\d{6})')[0].fillna('').str.zfill(6)
@@ -2061,7 +2061,7 @@ def get_signals() -> tuple[list[Signal], list, set, int, str, int]:
     recent_pushed_codes = {str(c) for c in df_clean[C.S_CODE] if is_recently_pushed(str(c), pushed)}
     pool = df_clean[mask].pipe(lambda d: d[~d[C.S_CODE].isin(recent_pushed_codes)]).copy()
     
-    if pool.empty: return [], [], pushed, len(df_clean), m_msg, len(df_clean)
+    if pool.empty: return {}, [], pushed, len(df_clean), m_msg, len(df_clean)
     
     if len(pool) > 200:
         log.info(f"💡 触发防爆流截断，基于 Spot 截面数据执行廉价预筛分，保留前 200 只高潜标的参与决选。")
@@ -2112,7 +2112,7 @@ def get_signals() -> tuple[list[Signal], list, set, int, str, int]:
         ex2.shutdown(wait=False, cancel_futures=True)
 
     if not all_hists:
-        return [], [], pushed, len(pool), m_msg, len(df_clean)
+        return {}, [], pushed, len(pool), m_msg, len(df_clean)
 
     # ML Feature Engineering
     panel = pd.concat(all_hists, ignore_index=True)
@@ -2329,12 +2329,60 @@ if __name__ == '__main__':
         elif not config.DINGTALK_WEBHOOK and not config.FEISHU_WEBHOOK:
             log.warning("未配置 WEBHOOK，将切换为本地打印模式供测试。")
             sigs, watch, pushed, pool_size, m_msg, total_mkt = get_signals()
-            import pprint
-            log.info("============== 本地信号输出 ==============")
-            for cat, arr in sigs.items():
-                print(f"[{cat}]")
-                for s in arr:
-                    print(f"{s.code} ({s.name}) {s.price} - {s.level}")
+            log.info("============== 每日投研简报 ==============")
+            now_ts = datetime.now(TZ_BJS)
+            now_str = now_ts.strftime('%Y-%m-%d %H:%M')
+            
+            header = f"## 🤖 AI量化选股系统\n> **{now_str}**\n\n"
+            total_signals = sum(len(sigs_list) for sigs_list in sigs.values()) if isinstance(sigs, dict) else len(sigs)
+            if total_mkt > 0:
+                pass_rate = total_signals / max(pool_size, 1) * 100 if pool_size > 0 else 0
+                header += f"**🔬 漏斗数据**：全市场白名单 `{total_mkt}` 只，异动提取 `{pool_size}` 只，完美过线 `{total_signals}` 只 (优选率 **{pass_rate:.1f}%**)\n\n"
+            
+            if m_msg:
+                header += f"{m_msg}\n\n---\n\n"
+            
+            if not any(sigs.values()) and not watch:
+                content = f"{header}✅ **系统检测结果**：今日未发现形态完全符合安全边际的标的，建议**空仓防守**。"
+            else:
+                content = header
+                
+                if any(sigs.values()):
+                    def format_signal(s):
+                        warn_msg = "> ⚡ **【风险警示】** 该股为创业板(波动±20%)，请务必**缩减仓位**。\n\n" if str(s.code).startswith('300') else ""
+                        return (
+                            f"#### 🎯 {s.name} (`{s.code}`)\n"
+                            f"{warn_msg}"
+                            f"- **综合评级**：`{s.score:.1f}` 分\n"
+                            f"- **今日收盘**：`¥{s.price}` ({s.pct_chg})\n\n"
+                            f"**💡 核心逻辑**\n{s.reasons}\n\n"
+                            f"**🛡️ 交易计划**\n"
+                            f"{s.money_risk_msg}\n"
+                            f"{s.tranche_plan_msg}\n"
+                            f"{s.plan_b_msg}\n"
+                            f"{s.hold_period_msg}\n"
+                            f"> ⚠️ 纪律: 破防守线 `¥{s.stop_loss}` 止损; 高开>4%放弃; 创新高按ATR止盈。\n\n"
+                        )
+                    
+                    if sigs.get('Resonance'):
+                        content += "### 🔥 今日唯一上榜：全周期共振精选 (Top 5)\n\n"
+                        parts = [format_signal(s) for s in sigs['Resonance']]
+                        content += "\n\n---\n\n".join(parts) + "\n\n---\n\n"
+                else:
+                    content += "✅ 今日未发现 B+ 级以上核心机会，正式推荐列表空仓防守中。\n"
+                
+                if watch:
+                    watch_lines = "\n".join(
+                        f"- `{code}` **{name}** (¥{price}) 得分: **{score:.1f}**"
+                        for name, code, score, price in watch[:5]
+                    )
+                    content += (
+                        f"### 👁️ 候补观察池（只看不买）\n"
+                        f"{watch_lines}\n\n"
+                        f"*注：以上标的评级不足 70 分，系统判断波动或风险偏大，暂不提供操作剧本。待其评级升至发车线后再考虑介入。*"
+                    )
+            
+            print(content)
             log.info("=========================================")
         else:
             sigs, watch, pushed, pool_size, m_msg, total_mkt = get_signals()

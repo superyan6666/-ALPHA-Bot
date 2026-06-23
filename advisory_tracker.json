@@ -39,14 +39,6 @@
     "horizon": "T+10",
     "max_days": 20
   },
-  "300401": {
-    "name": "花园生物",
-    "entry_date": "2026-06-12",
-    "target": 3.14,
-    "stop": 19.28,
-    "horizon": "T+10",
-    "max_days": 20
-  },
   "600475": {
     "name": "华光环能",
     "entry_date": "2026-06-15",
