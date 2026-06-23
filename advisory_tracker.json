@@ -55,14 +55,6 @@
     "horizon": "T+10",
     "max_days": 20
   },
-  "603300": {
-    "name": "海南华铁",
-    "entry_date": "2026-06-15",
-    "target": 5.73,
-    "stop": 4.89,
-    "horizon": "T+10",
-    "max_days": 20
-  },
   "301662": {
     "name": "宏工科技",
     "entry_date": "2026-06-15",
@@ -84,14 +76,6 @@
     "entry_date": "2026-06-16",
     "target": 10.5,
     "stop": 7.83,
-    "horizon": "T+10",
-    "max_days": 20
-  },
-  "301291": {
-    "name": "明阳电气",
-    "entry_date": "2026-06-16",
-    "target": 52.99,
-    "stop": 39.97,
     "horizon": "T+10",
     "max_days": 20
   },
@@ -140,6 +124,22 @@
     "entry_date": "2026-06-22",
     "target": 12.48,
     "stop": 10.11,
+    "horizon": "T+10",
+    "max_days": 20
+  },
+  "603393": {
+    "name": "新天然气",
+    "entry_date": "2026-06-23",
+    "target": 29.69,
+    "stop": 23.42,
+    "horizon": "T+10",
+    "max_days": 20
+  },
+  "605116": {
+    "name": "奥锐特",
+    "entry_date": "2026-06-23",
+    "target": 22.03,
+    "stop": 18.79,
     "horizon": "T+10",
     "max_days": 20
   }
