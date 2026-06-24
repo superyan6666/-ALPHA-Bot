@@ -71,14 +71,6 @@
     "horizon": "T+10",
     "max_days": 20
   },
-  "000537": {
-    "name": "绿发电力",
-    "entry_date": "2026-06-16",
-    "target": 10.5,
-    "stop": 7.83,
-    "horizon": "T+10",
-    "max_days": 20
-  },
   "300763": {
     "name": "锦浪科技",
     "entry_date": "2026-06-16",
