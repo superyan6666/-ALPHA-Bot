@@ -23,14 +23,6 @@
     "horizon": "T+10",
     "max_days": 20
   },
-  "300573": {
-    "name": "兴齐眼药",
-    "entry_date": "2026-06-10",
-    "target": 40.22,
-    "stop": 33.71,
-    "horizon": "T+10",
-    "max_days": 20
-  },
   "300065": {
     "name": "海兰信",
     "entry_date": "2026-06-12",
@@ -95,14 +87,6 @@
     "horizon": "T+10",
     "max_days": 20
   },
-  "600316": {
-    "name": "洪都航空",
-    "entry_date": "2026-06-19",
-    "target": 31.14,
-    "stop": 26.46,
-    "horizon": "T+10",
-    "max_days": 20
-  },
   "600426": {
     "name": "华鲁恒升",
     "entry_date": "2026-06-22",
@@ -119,19 +103,19 @@
     "horizon": "T+10",
     "max_days": 20
   },
-  "603393": {
-    "name": "新天然气",
-    "entry_date": "2026-06-23",
-    "target": 29.69,
-    "stop": 23.42,
-    "horizon": "T+10",
-    "max_days": 20
-  },
   "605116": {
     "name": "奥锐特",
     "entry_date": "2026-06-23",
     "target": 22.03,
     "stop": 18.79,
+    "horizon": "T+10",
+    "max_days": 20
+  },
+  "000596": {
+    "name": "古井贡酒",
+    "entry_date": "2026-06-25",
+    "target": 89.94,
+    "stop": 76.68,
     "horizon": "T+10",
     "max_days": 20
   }
