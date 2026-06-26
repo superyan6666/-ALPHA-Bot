@@ -55,27 +55,11 @@
     "horizon": "T+10",
     "max_days": 20
   },
-  "300113": {
-    "name": "顺网科技",
-    "entry_date": "2026-06-17",
-    "target": 22.46,
-    "stop": 18.62,
-    "horizon": "T+10",
-    "max_days": 20
-  },
   "300763": {
     "name": "锦浪科技",
     "entry_date": "2026-06-16",
     "target": 115.1,
     "stop": 82.04,
-    "horizon": "T+10",
-    "max_days": 20
-  },
-  "300047": {
-    "name": "天源迪科",
-    "entry_date": "2026-06-22",
-    "target": 11.4,
-    "stop": 9.36,
     "horizon": "T+10",
     "max_days": 20
   },
@@ -92,14 +76,6 @@
     "entry_date": "2026-06-22",
     "target": 30.95,
     "stop": 24.8,
-    "horizon": "T+10",
-    "max_days": 20
-  },
-  "603599": {
-    "name": "广信股份",
-    "entry_date": "2026-06-22",
-    "target": 12.48,
-    "stop": 10.11,
     "horizon": "T+10",
     "max_days": 20
   },
