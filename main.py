@@ -62,7 +62,7 @@ class AppConfig:
         self.TUSHARE_TOKEN = self.get('TUSHARE_TOKEN', '').strip()
         self.DINGTALK_WEBHOOK = self.get('DINGTALK_WEBHOOK', '')
         self.FEISHU_WEBHOOK = self.get('FEISHU_WEBHOOK', '')
-        self.NOTIFY_SEC_KEYWORD = self.get('NOTIFY_SEC_KEYWORD', 'AI量化').strip()
+        self.NOTIFY_SEC_KEYWORD = self.get('NOTIFY_SEC_KEYWORD', 'Hermes').strip()
         self.RUN_MODE = self.get('RUN_MODE', 'normal')
         
         # 校验错配：防止用户将飞书链接错填入钉钉变量，或将钉钉链接错填入飞书变量
@@ -1964,9 +1964,9 @@ def send_dingtalk(signals: dict[str, list[Signal]], watchlist: list, total_pool:
     now_str = now_ts.strftime('%Y-%m-%d %H:%M')
     run_mode = config.RUN_MODE
     
-    header = f"## 🤖 A股 AI量化选股系统\n> **{now_str}**\n\n"
+    header = f"## 🤖 A股选股系统\n> **{now_str}**\n\n"
     if run_mode == 'market_only' or run_mode == 'morning':
-        header = f"## 🤖 AI量化大盘深度体检\n> **{now_str}**\n\n"
+        header = f"## 🤖 A股大盘深度体检\n> **{now_str}**\n\n"
     elif run_mode not in ('market_only', 'morning') and total_market > 0:
         total_signals = sum(len(sigs) for sigs in signals.values()) if isinstance(signals, dict) else len(signals)
         pass_rate = total_signals / max(total_pool, 1) * 100 if total_pool > 0 else 0
@@ -1977,7 +1977,7 @@ def send_dingtalk(signals: dict[str, list[Signal]], watchlist: list, total_pool:
 
     if run_mode == 'morning':
         # 早盘仅发宏观快报，这里直接用 generate_macro_section 生成极简版
-        content = f"## 🌅 AI量化开盘快报\n> **{now_str}**\n\n" + generate_macro_section() + "\n\n> 🔔 早盘重点监控外围风险，避免开盘盲目冲动。尾盘 14:45 将发送完整选股报告。"
+        content = f"## 🌅 A股开盘快报\n> **{now_str}**\n\n" + generate_macro_section() + "\n\n> 🔔 早盘重点监控外围风险，避免开盘盲目冲动。尾盘 14:45 将发送完整选股报告。"
     elif run_mode == 'market_only':
         content = header + "✅ 大盘分析播报完毕，本次任务短路了全量个股运算。"
     elif "接口异常" in market_msg or "网络原因失败" in market_msg:
@@ -2045,7 +2045,7 @@ def send_dingtalk(signals: dict[str, list[Signal]], watchlist: list, total_pool:
         
         pass # Removed subjective reflection
         
-    NotificationGateway.send('🤖 A股 AI量化盘后提醒', content)
+    NotificationGateway.send('🤖 A股盘后提醒', content)
 
 def get_signals() -> tuple[dict[str, list[Signal]], list, set, int, str, int]:
     now = datetime.now(TZ_BJS)
@@ -2690,7 +2690,7 @@ if __name__ == '__main__':
             log.info("🔔 检测到测试模式，执行推送连通性测试...")
             now = datetime.now(TZ_BJS).strftime('%Y-%m-%d %H:%M:%S')
             NotificationGateway.send(
-                "🤖 AI量化引擎连通性测试",
+                "🤖 A股引擎连通性测试",
                 f"通知链路测试成功！\n- 时间: {now}\n- 状态: GitHub Actions 触发器已打通。"
             )
         elif not config.DINGTALK_WEBHOOK and not config.FEISHU_WEBHOOK:
@@ -2713,8 +2713,8 @@ if __name__ == '__main__':
             
     except Exception as e:
         log.critical(f"系统崩溃: {e}", exc_info=True)
-        error_msg = f"🚨 **AI量化引擎崩溃告警**\n\n**时间**: {_today_str()}\n**环境**: GitHub Actions\n**异常信息**: {str(e)[:300]}..."
-        NotificationGateway.send("🚨 AI量化引擎崩溃告警", error_msg, template="red")
+        error_msg = f"🚨 **A股引擎崩溃告警**\n\n**时间**: {_today_str()}\n**环境**: GitHub Actions\n**异常信息**: {str(e)[:300]}..."
+        NotificationGateway.send("🚨 A股引擎崩溃告警", error_msg, template="red")
         
     finally:
         _DATA_PROXY.cleanup()

@@ -1,9 +1,6 @@
 name: Intraday Right-Side Trading Bot
 
 on:
-  schedule:
-    # 提前至北京时间 14:45 触发 (尾盘买入法)，预留 Github Actions 队列排队延迟
-    - cron: '45 6 * * 1-5'
   workflow_dispatch:
     inputs:
       run_mode:
