@@ -1964,7 +1964,7 @@ def send_dingtalk(signals: dict[str, list[Signal]], watchlist: list, total_pool:
     now_str = now_ts.strftime('%Y-%m-%d %H:%M')
     run_mode = config.RUN_MODE
     
-    header = f"## 🤖 AI量化选股系统\n> **{now_str}**\n\n"
+    header = f"## 🤖 A股 AI量化选股系统\n> **{now_str}**\n\n"
     if run_mode == 'market_only' or run_mode == 'morning':
         header = f"## 🤖 AI量化大盘深度体检\n> **{now_str}**\n\n"
     elif run_mode not in ('market_only', 'morning') and total_market > 0:
@@ -2045,7 +2045,7 @@ def send_dingtalk(signals: dict[str, list[Signal]], watchlist: list, total_pool:
         
         pass # Removed subjective reflection
         
-    NotificationGateway.send('🤖 AI量化盘后提醒', content)
+    NotificationGateway.send('🤖 A股 AI量化盘后提醒', content)
 
 def get_signals() -> tuple[dict[str, list[Signal]], list, set, int, str, int]:
     now = datetime.now(TZ_BJS)
