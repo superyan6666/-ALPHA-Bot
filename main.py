@@ -1873,6 +1873,11 @@ class NotificationGateway:
     @staticmethod
     def _send_to_webhook(url: str, is_feishu: bool, msg_title: str, msg_text: str, sec_keyword: str, template: str = "blue") -> requests.Response:
         headers = {"Content-Type": "application/json"}
+        
+        # 统一强制注入安全关键词到标题，满足飞书和钉钉的关键词校验规则
+        if sec_keyword and sec_keyword not in msg_title:
+            msg_title = f"{sec_keyword} | {msg_title}"
+            
         if is_feishu:
             payload = {
                 "msg_type": "interactive",
@@ -1885,14 +1890,13 @@ class NotificationGateway:
                 }
             }
         else:
-            final_title = msg_title if sec_keyword in msg_title else f"{sec_keyword} | {msg_title}"
             final_text = msg_text
-            if sec_keyword not in final_text:
+            if sec_keyword and sec_keyword not in final_text:
                 final_text = f"### {sec_keyword}\n\n{final_text}"
             payload = {
                 'msgtype': 'markdown',
                 'markdown': {
-                    'title': final_title,
+                    'title': msg_title,
                     'text': final_text
                 }
             }
