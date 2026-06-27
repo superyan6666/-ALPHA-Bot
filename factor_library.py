@@ -115,11 +115,11 @@ def register_window_factors():
             
     for w in [5, 20]:
         # VP_REV (量价背离反转)
-        @registry.register(f"VP_REV_{w}", category="volume")
+        @registry.register(f"VP_REV_{w}", category="vol")
         def _f(df, w=w):
             ret = df.groupby('code')['close'].pct_change(w)
-            vol_ma = df.groupby('code')['volume'].transform(lambda x: x.rolling(w).mean())
-            return -ret * (df['volume'] / (vol_ma + 1e-8))
+            vol_ma = df.groupby('code')['vol'].transform(lambda x: x.rolling(w).mean())
+            return -ret * (df['vol'] / (vol_ma + 1e-8))
 
 register_window_factors()
 
