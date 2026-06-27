@@ -1,0 +1,14 @@
+﻿logs/
+outputs/
+__pycache__/
+.quantbot_data/
+hist_cache/
+stock-rader-temp/
+*.parquet
+*.csv
+*.jsonl
+*.db
+*.pt
+*.pth
+*.log
+venv/

@@ -28,10 +28,7 @@ import pytz
 import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed, TimeoutError as FuturesTimeoutError
 
-_GLOBAL_SEMAPHORE = threading.Semaphore(2)
-_BS_LOCK = threading.Lock()
-_CONSECUTIVE_FAILURES = 0
-_MAX_FAILURES = 10
+# [Phase 3] Removed stray globals: _GLOBAL_SEMAPHORE, _BS_LOCK, _CONSECUTIVE_FAILURES, _MAX_FAILURES
 
 from factors_config import Factor, get_factors_config
 # 导入区域结束
@@ -264,6 +261,16 @@ class Config:
     MIN_VOL_RATIO: float = field(default_factory=lambda: EnvParser.get_float('MIN_VOL_RATIO', 0.5))  
     MAX_VOL_RATIO: float = field(default_factory=lambda: EnvParser.get_float('MAX_VOL_RATIO', 15.0))
     
+    # [Phase 3] 向量化预筛分外部化参数
+    PRE_PE_MIN: float    = field(default_factory=lambda: EnvParser.get_float('PRE_PE_MIN', 0.0))
+    PRE_PE_MAX: float    = field(default_factory=lambda: EnvParser.get_float('PRE_PE_MAX', 40.0))
+    PRE_PB_MAX: float    = field(default_factory=lambda: EnvParser.get_float('PRE_PB_MAX', 2.0))
+    PRE_VR_HIGH: float   = field(default_factory=lambda: EnvParser.get_float('PRE_VR_HIGH', 1.5))
+    PRE_VR_LOW: float    = field(default_factory=lambda: EnvParser.get_float('PRE_VR_LOW', 0.7))
+    PRE_MCAP_MIN: float  = field(default_factory=lambda: EnvParser.get_float('PRE_MCAP_MIN', 50e8))
+    PRE_MCAP_MAX: float  = field(default_factory=lambda: EnvParser.get_float('PRE_MCAP_MAX', 500e8))
+    PRE_AMT_MIN: float   = field(default_factory=lambda: EnvParser.get_float('PRE_AMT_MIN', 1e8))
+    
     REQUIRED_COLS: tuple = (C.S_PRICE, C.S_OPEN, C.S_HIGH, C.S_LOW, C.S_VOL, C.S_AMT, 
                             C.S_PCT, C.S_CODE, C.S_NAME)
     OPTIONAL_COLS: tuple = (C.S_VR, C.S_TURN, C.S_MCAP, C.S_PE, C.S_PB)
@@ -366,6 +373,19 @@ class AdvisoryTracker:
                 codes_to_remove.append(code)
                 
         for code in codes_to_remove:
+            # [P0] 退出前记录结果到信号反馈闭环
+            try:
+                from signal_tracker import SignalTracker
+                _info = tracker[code]
+                _curr_price = float(spot_dict.get(code, 0))
+                _status = 'EXPIRED'
+                if _curr_price >= float(_info.get('target', 0)) and float(_info.get('target', 0)) > 0:
+                    _status = 'HIT_TARGET'
+                elif _curr_price <= float(_info.get('stop', 0)) and float(_info.get('stop', 0)) > 0:
+                    _status = 'HIT_STOP'
+                SignalTracker().update_outcome(code, _info.get('entry_date', ''), _status, _curr_price)
+            except Exception as _e:
+                log.warning(f"[SignalTracker] 退出记录失败 (非阻塞): {_e}")
             del tracker[code]
             
         cls.save_tracker(tracker)
@@ -480,7 +500,7 @@ def generate_plan_b(price: float, stop_loss: float, ma20: float) -> str:
     normal_shake = round(price * 0.97, 2)  
     normal_shake = max(normal_shake, stop_loss + 0.01)
     
-    return f"- 🛡️ **防守红线**：未破 `¥{normal_shake:.2f}` 为正常洗盘；若有效跌破 `¥{stop_loss:.2f}`，**必须无条件止损**。"
+    return f"- 🛡️ **防守红线**：跌破 `¥{stop_loss:.2f}` 无条件止损。附加**时间止损**：持仓 10 个交易日若未脱离成本区（涨幅在 ±3% 内），建议强制出局换仓。"
 
 def generate_hold_period(adx: float, price_pct: float, has_chip_break: bool) -> str:
     if price_pct < 0.35 and adx < 20:
@@ -529,6 +549,12 @@ class DataProxy:
     def __init__(self):
         self.bs_logged_in = False
         self.ts_pro = None
+        # [Phase 3] 隔离全局状态到实例内部
+        self.ak_semaphore = threading.Semaphore(2)
+        self.bs_lock = threading.Lock()
+        self.consecutive_failures = 0
+        self.max_failures = 10
+        
         ts_token = config.TUSHARE_TOKEN
         if ts_token:
             try:
@@ -596,7 +622,7 @@ class DataProxy:
 
     def _fetch_hist_baostock(self, code, start, end):
         if bs is None: return None
-        with _BS_LOCK:
+        with self.bs_lock:
             self._login_baostock()
             try:
                 prefix = 'sh.' if code.startswith('6') else 'sz.'
@@ -628,36 +654,44 @@ class DataProxy:
                 return None
 
     def _fetch_hist_akshare(self, code, start, end):
-        global _CONSECUTIVE_FAILURES
-        if _CONSECUTIVE_FAILURES >= _MAX_FAILURES:
-            log.error(f"🔥 [RateLimit_CIRCUIT] 连续 {_CONSECUTIVE_FAILURES} 次获取历史失败，熔断机制触发，冷却10秒后重置。")
+        if self.consecutive_failures >= self.max_failures:
+            log.error(f"🔥 [RateLimit_CIRCUIT] 连续 {self.consecutive_failures} 次获取历史失败，熔断机制触发，冷却10秒后重置。")
             time.sleep(10)
-            _CONSECUTIVE_FAILURES = 0
+            self.consecutive_failures = 0
             return None
+            
         for attempt in range(3):
-            with _GLOBAL_SEMAPHORE:
+            with self.ak_semaphore:
                 try:
                     # 引入随机微型延迟 (0.3s ~ 0.8s) 以平滑并发请求，避免触发 WAF 行情接口封锁限制
                     time.sleep(random.uniform(0.3, 0.8))
                     df = ak.stock_zh_a_hist(symbol=code, period='daily', start_date=start, end_date=end, adjust='qfq')
                     if df is not None and not df.empty:
-                        _CONSECUTIVE_FAILURES = 0
+                        self.consecutive_failures = 0
                         return df[list(Config.HIST_COLS)].copy()
+                except requests.exceptions.RequestException as e:
+                    log.debug(f"[Akshare Network Error] {e}")
                 except Exception as e:
-                    try:
-                        df = ak.stock_zh_a_hist_tx(symbol=code, start_date=start, end_date=end, adjust='qfq')
-                        if df is not None and not df.empty:
-                            col_map = {'日期': C.H_DATE, '开盘': C.H_OPEN, '收盘': C.H_CLOSE, '最高': C.H_HIGH, '最低': C.H_LOW, '成交量': C.H_VOL}
-                            df = df.rename(columns=col_map)
-                            _CONSECUTIVE_FAILURES = 0
-                            return df[list(Config.HIST_COLS)].copy()
-                    except Exception:
-                        pass
+                    pass
                     
-                    backoff = (2 ** attempt) + random.uniform(0, 1)
-                    log.warning(f"⚠️ [Akshare] 获取 {code} 历史失败, 冷却 {backoff:.1f}s 后重试...")
-                    time.sleep(backoff)
-        _CONSECUTIVE_FAILURES += 1
+                # [Phase 3] 精细化异常捕获，尝试备用源
+                try:
+                    df = ak.stock_zh_a_hist_tx(symbol=code, start_date=start, end_date=end, adjust='qfq')
+                    if df is not None and not df.empty:
+                        col_map = {'日期': C.H_DATE, '开盘': C.H_OPEN, '收盘': C.H_CLOSE, '最高': C.H_HIGH, '最低': C.H_LOW, '成交量': C.H_VOL}
+                        df = df.rename(columns=col_map)
+                        self.consecutive_failures = 0
+                        return df[list(Config.HIST_COLS)].copy()
+                except requests.exceptions.RequestException as e:
+                    log.debug(f"[Akshare_TX Network Error] {e}")
+                except Exception:
+                    pass
+                    
+                backoff = (2 ** attempt) + random.uniform(0, 1)
+                log.warning(f"⚠️ [Akshare] 获取 {code} 历史失败, 冷却 {backoff:.1f}s 后重试...")
+                time.sleep(backoff)
+                
+        self.consecutive_failures += 1
         raise ValueError(f'akshare history empty for {code}')
             
     def get_hist(self, code, start, end) -> pd.DataFrame:
@@ -1464,17 +1498,24 @@ def apply_scoring(data: dict, now: datetime, m_regime: str, vol_surge: bool, win
 
     raw_score = max(0, min(raw_score, 100))
     
-    # ── 【AI 胜率自进化机制】 ──
+    # ── 【AI 胜率自进化机制 (Bayesian Shrinkage)】 ──
     bucket = get_score_bucket(raw_score)
     b_stats = win_stats.get(bucket, {'win': 0, 'total': 0})
-    if b_stats['total'] >= 5:  
-        wr = b_stats['win'] / b_stats['total']
+    
+    total_trials = b_stats['total']
+    if total_trials > 0:
+        # 引入先验胜率 (Prior) 避免小样本波动过拟合
+        prior_win = 0.45  # 假设基础先验胜率为 45%
+        prior_weight = 10.0 # 先验样本数权重
+        
+        # 调整后胜率 = (实际胜利数 + 先验胜率 * 先验权重) / (实际总数 + 先验权重)
+        wr = (b_stats['win'] + prior_win * prior_weight) / (total_trials + prior_weight)
         multiplier = 0.8 + 0.4 * wr
         final_score = int(raw_score * multiplier)
-        reasons.append(f"- 🧬 **AI自进化**：该分数段实盘历史胜率 `{wr*100:.1f}%`，系统执行动态调分：**{raw_score} ➡️ {final_score}**")
+        reasons.append(f"- 🧬 **AI自进化(贝叶斯平滑)**：该分数段实盘 {total_trials} 次，平滑胜率 `{wr*100:.1f}%`，动态调分：**{raw_score} ➡️ {final_score}**")
     else:
         final_score = raw_score
-        reasons.append(f"- 🧬 **AI自进化**：该分数段暂无足够历史样本以供进化。")
+        reasons.append(f"- 🧬 **AI自进化**：该分数段暂无历史样本，保持原始得分。")
     
     final_score = max(0, min(final_score, 100))
     
@@ -1489,8 +1530,10 @@ def apply_scoring(data: dict, now: datetime, m_regime: str, vol_surge: bool, win
         
     return final_score, level, '\n'.join(reasons)
 
-def vectorized_prescreen(pool: pd.DataFrame, is_fallback: bool = False) -> pd.Series:
+def vectorized_prescreen(pool: pd.DataFrame, is_fallback: bool = False, m_temp: float = 0.5, c_conf: Config = None) -> pd.Series:
     """[性能优化] 向量化预筛分引擎，彻底消除 apply 带来的行级遍历开销"""
+    if c_conf is None:
+        c_conf = Config()
     s = pd.Series(50.0, index=pool.index)
     
     vr = pool.get(C.S_VR, pd.Series(1.0, index=pool.index)).fillna(1.0).astype(float)
@@ -1500,14 +1543,18 @@ def vectorized_prescreen(pool: pd.DataFrame, is_fallback: bool = False) -> pd.Se
     mcap = pool.get(C.S_MCAP, pd.Series(0.0, index=pool.index)).fillna(0.0).astype(float)
     amt = pool.get(C.S_AMT, pd.Series(0.0, index=pool.index)).fillna(0.0).astype(float)
     
+    # [Phase 2] 根据市场温度平滑调整权重 (牛市重动量，熊市重价值)
+    weight_momentum = 0.5 + m_temp  # 0.5 ~ 1.5
+    weight_value = 1.5 - m_temp     # 1.5 ~ 0.5
+    
     if not is_fallback:
-        s += np.where((vr > 1.5) & (pct > 0), 15.0, 0.0)
-        s -= np.where(vr < 0.7, 10.0, 0.0)
-        s += np.where((pe > 0) & (pe < 40), 8.0, 0.0)
-        s += np.where((pb > 0) & (pb < 2), 5.0, 0.0)
-        s += np.where((mcap > 50e8) & (mcap < 500e8), 8.0, 0.0)
+        s += np.where((vr > c_conf.PRE_VR_HIGH) & (pct > 0), 15.0 * weight_momentum, 0.0)
+        s -= np.where(vr < c_conf.PRE_VR_LOW, 10.0, 0.0)
+        s += np.where((pe > c_conf.PRE_PE_MIN) & (pe < c_conf.PRE_PE_MAX), 8.0 * weight_value, 0.0)
+        s += np.where((pb > 0) & (pb < c_conf.PRE_PB_MAX), 5.0 * weight_value, 0.0)
+        s += np.where((mcap > c_conf.PRE_MCAP_MIN) & (mcap < c_conf.PRE_MCAP_MAX), 8.0, 0.0)
         
-    s += np.where(amt > 1e8, 5.0, 0.0)
+    s += np.where(amt > c_conf.PRE_AMT_MIN, 5.0, 0.0)
     
     s += np.where((pct > 1.0) & (pct < 7.0), 10.0, 0.0)
     s -= np.where(pct > 9.0, 15.0, 0.0)
@@ -1682,13 +1729,13 @@ def get_ma_trend(cl_series: pd.Series) -> tuple[str, str]:
     else:
         return "震荡分化", "长短均线方向不一，无明显单边趋势"
 
-def extract_market_context(df_raw: pd.DataFrame, c_conf: Config) -> tuple[pd.DataFrame, bool, str, float, bool, str, bool]:
+def extract_market_context(df_raw: pd.DataFrame, c_conf: Config) -> tuple[pd.DataFrame, bool, str, float, bool, str, bool, float]:
 
     market_ok, market_msg, index_ret, market_overheated = True, "", 0.0, False
     market_regime = "NEUTRAL"
     vol_surge = False
     
-    if len(df_raw) < 1000: return pd.DataFrame(), False, "API 异常，横截面数据不足", 0.0, False, market_regime, vol_surge
+    if len(df_raw) < 1000: return pd.DataFrame(), False, "API 异常，横截面数据不足", 0.0, False, market_regime, vol_surge, 0.5
     
     north_flow, north_msg = fetch_northbound_flow()
     
@@ -1761,7 +1808,7 @@ def extract_market_context(df_raw: pd.DataFrame, c_conf: Config) -> tuple[pd.Dat
         if is_crashing or (beta_broken and vol_surge and pct < -1.0):
             advice = "🚨 **【大盘绝对熔断警报】** 大盘遭遇放量暴跌且波动率极速放大（典型主跌浪/股灾前兆）！系统已触发 Level 2 级别防守熔断，今日强制空仓，停止一切选股运算，绝不接飞刀！\n\n" + advice
             # 如果大盘极度恶劣，直接返回空 DataFrame 熔断后续一切算股逻辑
-            return pd.DataFrame(), False, advice, index_ret, market_overheated, "PANIC", vol_surge
+            return pd.DataFrame(), False, advice, index_ret, market_overheated, "PANIC", vol_surge, 0.0
             
         elif beta_broken:
             advice = "🚨 **【大盘结构性走熊警告】** 大盘日线跌破 60 日均线且 MACD 死叉，处于绝对熊市结构！建议空仓或极低仓位试错，由于个股可能分化，今日仍推送高潜质标的供观察，但严禁盲目重仓做多！\n\n" + advice
@@ -1809,7 +1856,15 @@ def extract_market_context(df_raw: pd.DataFrame, c_conf: Config) -> tuple[pd.Dat
     
     df = df_raw.dropna(subset=list(c_conf.REQUIRED_COLS))
     df = df[~df[C.S_NAME].str.contains('ST|退')]
-    return df, market_ok, market_msg, index_ret, market_overheated, market_regime, vol_surge
+    
+    # [Phase 2] 计算连续的市场温度 (0~1)，替代离散的牛熊切分
+    try:
+        bias_20 = ((cl.iloc[-1] - ma20) / ma20) * 100
+        market_temp = float(1.0 / (1.0 + np.exp(-bias_20 / 3.0)))
+    except:
+        market_temp = 0.5
+        
+    return df, market_ok, market_msg, index_ret, market_overheated, market_regime, vol_surge, market_temp
 
 # ═════════════════════════════════════════════════════════════════════════════
 # 10. 统一通知网关 (Unified Notification Gateway)
@@ -1961,9 +2016,13 @@ def send_dingtalk(signals: dict[str, list[Signal]], watchlist: list, total_pool:
                 )
 
             # --- Formatting Sections ---
-            if signals.get('Resonance'):
-                content += "### 🔥 今日唯一上榜：全周期共振精选 (Top 5)\n\n"
-                parts = [format_signal(s) for s in signals['Resonance']]
+            if signals.get('Core'):
+                content += "### 🔥 核心主力池：全周期共振精选 (Top 1~3，可实盘)\n\n"
+                parts = [format_signal(s) for s in signals['Core']]
+                content += "\n\n---\n\n".join(parts) + "\n\n---\n\n"
+            if signals.get('Satellite'):
+                content += "### 🛰️ 卫星观察池：高潜反转备选 (Top 4~15，建议模拟盘)\n\n"
+                parts = [format_signal(s) for s in signals['Satellite']]
                 content += "\n\n---\n\n".join(parts) + "\n\n---\n\n"
                 
         else:
@@ -1984,12 +2043,12 @@ def send_dingtalk(signals: dict[str, list[Signal]], watchlist: list, total_pool:
         
     NotificationGateway.send('🤖 AI量化盘后提醒', content)
 
-def get_signals() -> tuple[list[Signal], list, set, int, str, int]:
+def get_signals() -> tuple[dict[str, list[Signal]], list, set, int, str, int]:
     now = datetime.now(TZ_BJS)
     
     log.info('🚀 防呆长线安全级·盘后复盘引擎启动...')
     if not IS_MANUAL and not is_valid_run_time(now): 
-        return [], [], set(), 0, "", 0
+        return {}, [], set(), 0, "", 0
 
     pushed = load_pushed_state() 
 
@@ -1997,10 +2056,22 @@ def get_signals() -> tuple[list[Signal], list, set, int, str, int]:
         df_raw = fetch_spot()
     except Exception as e:
         log.error(f"❌ 核心横截面行情获取失败: {e}")
-        return [], [], pushed, 0, f"⚠️ **行情接口异常，体检中断**: {e}", 0
+        return {}, [], pushed, 0, f"⚠️ **行情接口异常，体检中断**: {e}", 0
 
     c_conf = Config()
-    df_clean, m_ok, m_msg, idx_ret, m_overheated, m_regime, vol_surge = extract_market_context(df_raw, c_conf)
+    df_clean, m_ok, m_msg, idx_ret, m_overheated, m_regime, vol_surge, m_temp = extract_market_context(df_raw, c_conf)
+
+    # --- VIX-TS Macro Filter ---
+    try:
+        from research.vix_ts_filter import get_vix_ts_signal
+        vix_pct, vix_state, vix_msg = get_vix_ts_signal(now)
+        if vix_msg:
+            m_msg += f"\n\n{vix_msg}\n"
+        if vix_state == 'halt_buy':
+            log.warning("🚨 VIX-TS 触发极端恐慌，全局禁止买入！")
+            return {}, [], pushed, 0, m_msg, len(df_raw)
+    except Exception as e:
+        log.error(f"VIX-TS 宏观指标获取失败: {e}")
 
     if 'DATA_MODE' in df_raw.columns and (df_raw['DATA_MODE'] == 'T+1_FALLBACK').any():
         m_msg += "\n\n> 🚨 **严重警告**：今日所有实时行情流中断，当前所有技术信号均基于【昨日 T-1 收盘截面】生成，严禁用于今日盘中实盘交易！\n\n"
@@ -2011,13 +2082,13 @@ def get_signals() -> tuple[list[Signal], list, set, int, str, int]:
 
     if config.RUN_MODE in ('market_only', 'morning'):
         log.info(f"🤖 [{config.RUN_MODE}模式] 完毕，退出个股运算。")
-        return [], [], pushed, 0, m_msg, len(df_raw)
+        return {}, [], pushed, 0, m_msg, len(df_raw)
 
 
     hot_sectors_map = fetch_hot_sectors()
 
     if df_clean.empty:
-        return [], [], pushed, 0, m_msg, 0
+        return {}, [], pushed, 0, m_msg, 0
 
     # 统一标准化股票代码为 6 位数字符串，剥离可能存在的市场前缀(如 sh/sz/bj)与后缀(如 .SH/.SZ)
     df_clean[C.S_CODE] = df_clean[C.S_CODE].astype(str).str.extract(r'(\d{6})')[0].fillna('').str.zfill(6)
@@ -2041,7 +2112,7 @@ def get_signals() -> tuple[list[Signal], list, set, int, str, int]:
     is_etf = df_clean[C.S_CODE].astype(str).str.startswith(('51', '15', '588', '56'))
     
     # 严格基本面初筛，切断亏损股和严重破净/高估股的入围路径
-    pe_cond = (df_clean[C.S_PE] > 0) | (df_clean[C.S_PE].isna()) | is_fallback | is_etf
+    pe_cond = True # [Quick Fix] 取消 PE>0 强制过滤，允许负 PE 个股入池，将反转潜力交由模型判断
     pb_cond = (df_clean[C.S_PB].between(0.1, 20.0)) | (df_clean[C.S_PB].isna()) | is_etf
     
     stock_mask = (df_clean[C.S_MCAP].between(c_conf.MIN_CAP, c_conf.MAX_CAP) | df_clean[C.S_MCAP].isna()) & \
@@ -2061,13 +2132,13 @@ def get_signals() -> tuple[list[Signal], list, set, int, str, int]:
     recent_pushed_codes = {str(c) for c in df_clean[C.S_CODE] if is_recently_pushed(str(c), pushed)}
     pool = df_clean[mask].pipe(lambda d: d[~d[C.S_CODE].isin(recent_pushed_codes)]).copy()
     
-    if pool.empty: return [], [], pushed, len(df_clean), m_msg, len(df_clean)
+    if pool.empty: return {}, [], pushed, len(df_clean), m_msg, len(df_clean)
     
     if len(pool) > 200:
         log.info(f"💡 触发防爆流截断，基于 Spot 截面数据执行廉价预筛分，保留前 200 只高潜标的参与决选。")
-        pool['_pre_score'] = vectorized_prescreen(pool, is_fallback)
+        pool['_pre_score'] = vectorized_prescreen(pool, is_fallback, m_temp, c_conf)
         pool = pool.sort_values(by='_pre_score', ascending=False).head(200)
-        pool = pool.drop(columns=['_pre_score'])
+        # 保留 _pre_score 供后续模型缺失时风格降级使用
         
     # [风控守门人] 全局 NaN 空洞扫描
     nan_count = pool.isna().sum().sum()
@@ -2095,6 +2166,8 @@ def get_signals() -> tuple[list[Signal], list, set, int, str, int]:
                     C.H_LOW: 'low', C.H_CLOSE: 'close', C.H_VOL: 'vol'
                 }, inplace=True)
                 hist_ml['code'] = row[C.S_CODE]
+                if '_pre_score' in row:
+                    hist_ml['_pre_score'] = row['_pre_score']
                 all_hists.append(hist_ml)
                 
                 result = process_stock(row, hist, now, m_ok, idx_ret, hot_sectors_map)
@@ -2112,7 +2185,7 @@ def get_signals() -> tuple[list[Signal], list, set, int, str, int]:
         ex2.shutdown(wait=False, cancel_futures=True)
 
     if not all_hists:
-        return [], [], pushed, len(pool), m_msg, len(df_clean)
+        return {}, [], pushed, len(pool), m_msg, len(df_clean)
 
     # ML Feature Engineering
     panel = pd.concat(all_hists, ignore_index=True)
@@ -2121,11 +2194,30 @@ def get_signals() -> tuple[list[Signal], list, set, int, str, int]:
     
     try:
         panel = build_ml_features(panel)
+        from factor_library import calculate_factors
+        panel = calculate_factors(panel)
+        
+        # === [Phase 5] 实时交易环境应用正交化权重 ===
+        if os.path.exists('promoted_factors.json'):
+            import json
+            with open('promoted_factors.json', 'r', encoding='utf-8') as f:
+                _registry = json.load(f)
+                for f_name, v in _registry.items():
+                    if 'ortho_weights' in v and f_name in panel.columns:
+                        weights = v['ortho_weights']
+                        intercept = weights.get('intercept', 0.0)
+                        betas = weights.get('betas', {})
+                        if all(b_col in panel.columns for b_col in betas.keys()):
+                            pred = intercept
+                            for b_col, beta in betas.items():
+                                pred += panel[b_col] * beta
+                            panel[f_name] = panel[f_name] - pred
+        
         feature_success = True
     except Exception as e:
-        log.error(f"🚨 ML Feature Computation Failed: {e}")
+        log.error(f"🚨 Feature Computation Failed: {e}")
         log.error(traceback.format_exc())
-        m_msg += "\n\n> ⚠️ **风控告警**：ML特征计算异常，今日信号基于中性基准 (0.5)！\n\n"
+        m_msg += "\n\n> ⚠️ **风控告警**：特征计算异常，今日信号基于中性基准 (0.5)！\n\n"
         feature_success = False
 
     # Extract today's cross section
@@ -2140,20 +2232,30 @@ def get_signals() -> tuple[list[Signal], list, set, int, str, int]:
     horizons = [1, 5, 10, 20]
     
     import json
+    if not hasattr(get_signals, '_MODEL_CACHE'):
+        get_signals._MODEL_CACHE = {}
+        
     for h in horizons:
         model_path = f'.quantbot_data/prod_pt_model_t{h}.pth'
         meta_path = f'.quantbot_data/prod_pt_meta_t{h}.json'
         if not os.path.exists(model_path) or not os.path.exists(meta_path):
-            log.warning(f"⚠️ 找不到 T+{h} 模型或元数据，跳过此周期的选股。")
-            today_panel[f'xgb_score_t{h}'] = 0.5
-            today_panel[f'rank_t{h}'] = 0.5
+            log.warning(f"⚠️ 找不到 T+{h} 模型或元数据，触发【规则风格降级】(Fallback)。")
+            if '_pre_score' in today_panel.columns:
+                today_panel[f'xgb_score_t{h}'] = today_panel['_pre_score']
+            else:
+                today_panel[f'xgb_score_t{h}'] = 0.5
+            today_panel[f'rank_t{h}'] = today_panel[f'xgb_score_t{h}'].rank(pct=True)
             continue
             
-        with open(meta_path, 'r') as f:
-            features = json.load(f)['features']
-            
-        ltr = PyTorchDLModel(input_dim=len(features))
-        ltr.load_model(model_path)
+        if model_path not in get_signals._MODEL_CACHE:
+            with open(meta_path, 'r') as f:
+                features = json.load(f)['features']
+                
+            ltr = PyTorchDLModel(input_dim=len(features))
+            ltr.load_model(model_path)
+            get_signals._MODEL_CACHE[model_path] = (ltr, features)
+        else:
+            ltr, features = get_signals._MODEL_CACHE[model_path]
         
         if feature_success and len(today_panel) > 0:
             xgb_preds = ltr.predict(today_panel, features)
@@ -2168,9 +2270,115 @@ def get_signals() -> tuple[list[Signal], list, set, int, str, int]:
         # Cross-sectional rank
         today_panel[f'rank_t{h}'] = today_panel[f'xgb_score_t{h}'].rank(pct=True)
 
-    # Apply Veto System
-    today_panel['core_rank'] = (today_panel.get('rank_t10', 0.5) + today_panel.get('rank_t20', 0.5)) / 2.0
+    # === PHASE 4: 市场状态感知 (Regime Detection) ===
+    from regime_detector import RegimeDetector
+    regime_det = RegimeDetector()
+    current_regime = regime_det.get_current_regime(panel)
+    regime_state = current_regime['state']
+    regime_label = current_regime['label']
+    m_msg += f"\n\n> 🧭 **市场状态感知 (Phase 4)**\n> 经 HMM 判定当前大盘处于：**{regime_label}**，已针对性调整风格权重。"
+
+    # === PHASE 0/1: 动态自适应评分板 (Dynamic Scoring Board) ===
+    import json
+    active_factors = []
+    watch_factors = []
+    promoted_registry = {}
+    if os.path.exists('promoted_factors.json'):
+        try:
+            with open('promoted_factors.json', 'r', encoding='utf-8') as f:
+                promoted_registry = json.load(f)
+                active_factors = [k for k, v in promoted_registry.items() if v.get('status') in ['ACTIVE', 'RECOVERED']]
+                watch_factors = [k for k, v in promoted_registry.items() if v.get('status') == 'WATCH']
+        except Exception as e:
+            log.warning(f"读取 promoted_factors.json 失败: {e}")
+            
+    valid_active = [f for f in active_factors if f in today_panel.columns]
+    valid_watch = [f for f in watch_factors if f in today_panel.columns]
+    valid_factors = valid_active + valid_watch
     
+    if valid_factors:
+        # 因子截面 Rank
+        ranks = today_panel[valid_factors].rank(pct=True)
+        
+        # [Phase 4] 根据市场状态实施权重偏置
+        for f in valid_factors:
+            gene = promoted_registry.get(f, {}).get('gene_label', '')
+            if regime_state == 2: # 危机期
+                if '价值' in gene or '质量' in gene:
+                    ranks[f] = np.clip(0.5 + (ranks[f] - 0.5) * 1.5, 0, 1)
+                elif '动量' in gene or '波动' in gene:
+                    ranks[f] = 0.5 + (ranks[f] - 0.5) * 0.5
+            elif regime_state == 1: # 趋势期
+                if '动量' in gene or '趋势' in gene:
+                    ranks[f] = np.clip(0.5 + (ranks[f] - 0.5) * 1.5, 0, 1)
+
+        # [Phase 1] 对于处于 WATCH 观察期的因子，强制削减其偏离中位数的力度 (减权 50%)
+        for f in valid_watch:
+            ranks[f] = 0.5 + (ranks[f] - 0.5) * 0.5
+            
+        for f in valid_factors:
+            today_panel[f'rank_{f}'] = ranks[f]
+            
+        today_panel['factor_board_score'] = ranks.mean(axis=1)
+        
+        # 动态权重：逆方差加权 (Inverse Variance)
+        ml_rank = (today_panel.get('rank_t10', 0.5) + today_panel.get('rank_t20', 0.5)) / 2.0
+        factor_rank = today_panel['factor_board_score']
+        
+        ml_std = ml_rank.std() + 1e-5
+        factor_std = factor_rank.std() + 1e-5
+        
+        ml_weight = (1.0 / ml_std) / ((1.0 / ml_std) + (1.0 / factor_std))
+        factor_weight = 1.0 - ml_weight
+        
+        today_panel['core_rank'] = ml_rank * ml_weight + factor_rank * factor_weight
+        log.info(f"💎 动态打分板已激活! ML_W={ml_weight:.2f}, Factor_W={factor_weight:.2f}, 融合 {len(valid_factors)} 个晋升因子。")
+
+    else:
+        today_panel['core_rank'] = (today_panel.get('rank_t10', 0.5) + today_panel.get('rank_t20', 0.5)) / 2.0
+
+    # [Phase 1/2] 融合规则基准分 (Base Score 调整项)
+    if '_pre_score' in today_panel.columns:
+        rule_rank = today_panel['_pre_score'].rank(pct=True)
+        today_panel['core_rank'] = today_panel['core_rank'] * 0.8 + rule_rank * 0.2
+
+    # === PHASE 4: 交易冲击折价 (Liquidity Penalty) ===
+    if 'amount' in today_panel.columns:
+        amt = today_panel['amount']
+        # 取当日截面成交额的后 10% 作为动态惩罚基准
+        threshold = amt.quantile(0.10)
+        # 为了防止 threshold 极度异常导致除 0，给个最低下限
+        threshold = max(threshold, 1e6) 
+        penalty = np.where(amt < threshold, 0.1 * (threshold - amt) / threshold, 0)
+        today_panel['core_rank'] = today_panel['core_rank'] - penalty
+        today_panel['liquidity_penalty'] = penalty
+    else:
+        today_panel['liquidity_penalty'] = 0.0
+
+    # === PHASE 0: 双核自适应仓位控制 (Dual-Factor Position Engine) ===
+    macro_advice = ""
+    if 'F_VIX_TS' in today_panel.columns and 'F_ERP' in today_panel.columns:
+        vix_val = today_panel['F_VIX_TS'].median()
+        erp_val = today_panel['F_ERP'].median()
+        
+        # 简单非线性映射: Sigmoid (ERP 越高代表越有长线性价比)
+        base_pos = 1.0 / (1.0 + np.exp(-erp_val)) 
+        
+        # VIX 惩罚/奖励：恐慌且便宜 -> 左侧抄底；纯粹恐慌 -> 熔断避险
+        if vix_val > 1.5 and erp_val > 1.0:
+            final_pos = min(1.0, base_pos + 0.3)
+            macro_state = "🔥【极度恐慌 + 极具性价比】启动左侧逆势建仓！"
+        elif vix_val > 2.0:
+            final_pos = 0.1
+            macro_state = "🚨【宏观熔断】恐慌盘涌现且估值无保护，强制空仓避险！"
+        else:
+            final_pos = base_pos
+            macro_state = "⚖️【宏观均衡】顺势而为"
+            
+        pos_pct = int(final_pos * 100)
+        macro_advice = f"\n\n> 🧠 **双核自适应仓位引擎 (Phase 0)**\n> 当前 VIX 恐慌度: `{vix_val:.2f}`, ERP 性价比: `{erp_val:.2f}`\n> **🔥 动态建议底仓水位**: **{pos_pct}%** ({macro_state})"
+        m_msg += macro_advice
+        
     # Baseline pool: Top 10% of core
     candidates = today_panel[today_panel['core_rank'] >= 0.90].copy()
     
@@ -2180,11 +2388,123 @@ def get_signals() -> tuple[list[Signal], list, set, int, str, int]:
     # Filter B: T+5 Anti-Bleeding (rank_t5 > 0.40)
     candidates = candidates[candidates['rank_t5'] > 0.40]
     
+    # Filter C: Feedback Meta-Critic Veto
+    try:
+        critic_pth = '.quantbot_data/prod_meta_critic.pth'
+        critic_meta = '.quantbot_data/prod_meta_critic_meta.json'
+        if os.path.exists(critic_pth) and os.path.exists(critic_meta):
+            import json
+            from ml_engine import PyTorchClassifier
+            with open(critic_meta, 'r') as f:
+                meta = json.load(f)
+            
+            critic_model = PyTorchClassifier(input_dim=len(meta['feature_cols']), num_classes=meta.get('num_classes', 3))
+            critic_model.load_model(critic_pth)
+            
+            # Predict probabilities
+            probs = critic_model.predict(candidates, meta['feature_cols'])
+            
+            # Filter Fail probability > 0.5
+            fail_probs = probs[:, 0]
+            valid_mask = (fail_probs <= 0.5) | np.isnan(fail_probs)
+            
+            candidates = candidates[valid_mask].copy()
+            
+            # Boost core rank
+            if len(candidates) > 0:
+                # probs[valid_mask] matches rows in candidates since we just filtered
+                boost_mult = probs[valid_mask, 1] + probs[valid_mask, 2]
+                candidates['core_rank'] = candidates['core_rank'] * boost_mult
+                
+    except Exception as e:
+        log.warning(f"Failed to apply Meta-Critic Veto: {e}")
+        
+    # [Phase 4] Signal Confirmation Meta Layer (资金流/筹码一票否决与保送)
+    if 'F_mfi_14' in candidates.columns:
+        mfi = candidates['F_mfi_14'].fillna(50.0)
+        # 强力资金流入 -> 直接保送（提权）
+        candidates.loc[mfi > 80.0, 'core_rank'] *= 1.2
+        # 资金溃散 -> 惩罚打分（降级或淘汰）
+        candidates.loc[mfi < 30.0, 'core_rank'] *= 0.7
+        log.info(f"🛡️ 资金流 Meta 层触发：保送 {(mfi > 80.0).sum()} 只，惩罚降级 {(mfi < 30.0).sum()} 只。")
+
     # Sort and pick top K
-    candidates = candidates.sort_values('core_rank', ascending=False).head(5)
-    
+    candidates = candidates.sort_values('core_rank', ascending=False).head(15) # [Phase 2] 扩大信号池
+
+    # ── [Phase 2-B] 组合相关性风控 ─────────────────────────────────────────
+    try:
+        cand_codes = candidates['code'].tolist()
+        if len(cand_codes) >= 2 and 'close' in panel.columns:
+            panel_dt = panel.copy()
+            panel_dt['date'] = pd.to_datetime(panel_dt['date'])
+            sorted_dates = sorted(panel_dt['date'].unique())
+
+            def _get_ret_matrix(n_days: int) -> pd.DataFrame:
+                """Return (n_days) daily return matrix for candidate codes."""
+                window_dates = sorted_dates[-n_days:] if len(sorted_dates) >= n_days else sorted_dates
+                w = panel_dt[panel_dt['date'].isin(window_dates) & panel_dt['code'].isin(cand_codes)]
+                pivot = w.pivot_table(index='date', columns='code', values='close')
+                return pivot.pct_change().dropna(how='all')
+
+            ret60 = _get_ret_matrix(60)
+            ret10 = _get_ret_matrix(10)
+            corr60 = ret60.corr(method='pearson') if len(ret60) >= 5 else pd.DataFrame()
+            corr10 = ret10.corr(method='pearson') if len(ret10) >= 5 else pd.DataFrame()
+
+            # 动态阈值：min(0.85, 全市场均值相关 + 0.10)
+            all_ret60 = panel_dt[panel_dt['date'].isin(sorted_dates[-60:])].pivot_table(
+                index='date', columns='code', values='close'
+            ).pct_change().dropna(how='all')
+            if all_ret60.shape[1] >= 10:
+                flat_corr = all_ret60.corr().values
+                np.fill_diagonal(flat_corr, np.nan)
+                mkt_mean_corr = float(np.nanmean(flat_corr))
+            else:
+                mkt_mean_corr = 0.60
+            dynamic_threshold = min(0.85, mkt_mean_corr + 0.10)
+            log.info(f"[风控] 动态相关阈值: {dynamic_threshold:.3f} (市场均值={mkt_mean_corr:.3f})")
+
+            selected_pool = []   # codes that survived the filter
+            rejected_codes = set()
+            for _, cand_row in candidates.iterrows():
+                code_a = cand_row['code']
+                if code_a in rejected_codes:
+                    continue
+                blocked = False
+                for code_b in selected_pool:
+                    # Dual-window: trigger if EITHER 10d or 60d exceeds threshold
+                    c10 = corr10.loc[code_a, code_b] if (code_a in corr10.index and code_b in corr10.columns) else 0.0
+                    c60 = corr60.loc[code_a, code_b] if (code_a in corr60.index and code_b in corr60.columns) else 0.0
+                    c10 = float(c10) if not np.isnan(c10) else 0.0
+                    c60 = float(c60) if not np.isnan(c60) else 0.0
+                    trigger_corr = max(c10, c60)
+
+                    if trigger_corr >= dynamic_threshold:
+                        # Diagnose: event_spike vs sector_based
+                        diag = "event_spike" if (c10 > c60 * 1.5 and c60 > 0) else "sector_based"
+                        trigger_win = "10日" if c10 >= c60 else "60日"
+                        log.info(
+                            f"[风控拦截] {code_a} vs {code_b} 走势高度重合 "
+                            f"({trigger_win} Corr={trigger_corr:.2f} ≥ {dynamic_threshold:.2f})，"
+                            f"类型: {diag}，已拦截 {code_a} 让位给低相关标的。"
+                        )
+                        blocked = True
+                        rejected_codes.add(code_a)
+                        break
+
+                if not blocked:
+                    selected_pool.append(code_a)
+
+            # Keep only passed codes, maintaining original rank order
+            candidates = candidates[candidates['code'].isin(selected_pool)].copy()
+            log.info(f"[风控] 相关性过滤后剩余候选: {len(candidates)} 只 (原 {len(cand_codes)} 只)")
+    except Exception as _e:
+        log.warning(f"[风控] 组合相关性过滤异常 (非阻塞，继续): {_e}")
+    # ──────────────────────────────────────────────────────────────────────
+
     resonance_signals = []
-    for _, ml_row in candidates.iterrows():
+    satellite_signals = []
+    for i, (_, ml_row) in enumerate(candidates.iterrows()):
         code = ml_row['code']
         if code not in stock_infos: continue
         info = stock_infos[code]
@@ -2203,6 +2523,29 @@ def get_signals() -> tuple[list[Signal], list, set, int, str, int]:
         level = f"🔥 共振得分: {score:.1f} (T+10/T+20主脑)\n  ⚡ T+1独立择时: {t1_rank:.1f} ({t1_tag})\n  ⚡ T+5波段评估: {t5_rank:.1f}"
         
         reas_list = [f"🏆 **核心基本盘打分**: `{score:.2f}`"]
+        if ml_row.get('liquidity_penalty', 0) > 0:
+            reas_list.append(f"💧 **流动性折价惩罚**: `-{float(ml_row['liquidity_penalty']*100):.1f}%` (日成交额处全市场底层10%)")
+        
+        # [Phase 3] 基因族聚合展示
+        if 'promoted_registry' in locals() and valid_factors:
+            gene_drivers = {}
+            for f in valid_factors:
+                rk_col = f'rank_{f}'
+                if rk_col in ml_row and ml_row[rk_col] >= 0.8:
+                    gene = promoted_registry.get(f, {}).get('gene_label', '')
+                    if not gene:
+                        gene = "未分类基因"
+                    if gene not in gene_drivers:
+                        gene_drivers[gene] = []
+                    gene_drivers[gene].append(f.replace('F_', ''))
+            
+            for gene_label, flist in gene_drivers.items():
+                parts = gene_label.split('·')
+                if len(parts) == 2:
+                    reas_list.append(f"🧬 **{parts[1]}驱动** ({parts[0]}): `{', '.join(flist)}`")
+                else:
+                    reas_list.append(f"🧬 **{gene_label}驱动**: `{', '.join(flist)}`")
+
         if 'alpha_reversal_5d' in ml_row and not pd.isna(ml_row['alpha_reversal_5d']):
             reas_list.append(f"🔄 **短期反转强度**: `{ml_row['alpha_reversal_5d']:.3f}`")
         if 'clv' in ml_row and not pd.isna(ml_row['clv']):
@@ -2227,14 +2570,34 @@ def get_signals() -> tuple[list[Signal], list, set, int, str, int]:
             money_risk_msg=money_msg, tranche_plan_msg=tranche_msg,
             plan_b_msg=plan_b_msg, hold_period_msg=hold_msg
         )
-        resonance_signals.append(sig)
+        if i < 3:
+            resonance_signals.append(sig)
+        else:
+            satellite_signals.append(sig)
         
     confirmed_data_dict = {
-        'Resonance': resonance_signals
+        'Core': resonance_signals,
+        'Satellite': satellite_signals
     }
     
     # Push the generated signals to AdvisoryTracker
     AdvisoryTracker.add_signals(resonance_signals, 'T+10') # Use T+10 as default tracking horizon for Resonance
+    
+    # [P0] Signal Outcome Tracker — 信号反馈闭环归档
+    try:
+        from signal_tracker import SignalTracker
+        _ranks_dict = {}
+        for _, _r in today_panel.iterrows():
+            _ranks_dict[_r['code']] = {
+                'rank_t1': float(_r.get('rank_t1', 0)),
+                'rank_t5': float(_r.get('rank_t5', 0)),
+                'rank_t10': float(_r.get('rank_t10', 0)),
+                'rank_t20': float(_r.get('rank_t20', 0)),
+                'core_rank': float(_r.get('core_rank', 0)),
+            }
+        SignalTracker().log_signal(confirmed_data_dict, _ranks_dict, m_msg)
+    except Exception as _e:
+        log.warning(f"[SignalTracker] 信号归档失败 (非阻塞): {_e}")
     
     watchlist_data.sort(key=lambda x: (x[2], x[1]), reverse=True) 
     
@@ -2334,7 +2697,10 @@ if __name__ == '__main__':
             for cat, arr in sigs.items():
                 print(f"[{cat}]")
                 for s in arr:
-                    print(f"{s.code} ({s.name}) {s.price} - {s.level}")
+                    try:
+                        print(f"{s.code} ({s.name}) {s.price} - {s.level}")
+                    except UnicodeEncodeError:
+                        print(f"{s.code} ({s.name}) {s.price} - {s.level}".encode('gbk', 'replace').decode('gbk'))
             log.info("=========================================")
         else:
             sigs, watch, pushed, pool_size, m_msg, total_mkt = get_signals()

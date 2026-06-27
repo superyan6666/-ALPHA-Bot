@@ -91,10 +91,15 @@ jobs:
             python main.py
           fi
 
+      - name: 回填信号实际收益
+        if: ${{ github.event_name == 'schedule' || inputs.run_mode == 'normal' }}
+        run: |
+          python -c "from signal_tracker import SignalTracker; SignalTracker().backfill_outcomes()"
+
       - name: 保存运行状态与辅助跟踪账本
         if: ${{ github.event_name == 'schedule' || inputs.run_mode == 'normal' }} 
         uses: stefanzweifel/git-auto-commit-action@v5
         with:
-          commit_message: "[bot] 更新推送状态与AI辅助跟踪队列"
-          file_pattern: 'pushed_state.json advisory_tracker.json'
+          commit_message: "[bot] 更新推送状态、跟踪队列与信号归档"
+          file_pattern: 'pushed_state.json advisory_tracker.json .quantbot_data/signal_history.jsonl'
           commit_options: '--no-verify --signoff'

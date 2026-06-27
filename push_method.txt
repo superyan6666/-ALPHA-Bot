@@ -1,0 +1,34 @@
+def send_dingtalk(signals: dict[str, list[Signal]], watchlist: list, total_pool: int, total_market: int, market_msg: str) -> None:
+    now_ts = datetime.now(TZ_BJS)
+    now_str = now_ts.strftime('%Y-%m-%d %H:%M')
+    run_mode = config.RUN_MODE
+    
+    header = f"## 🤖 AI量化选股系统\n> **{now_str}**\n\n"
+    if run_mode == 'market_only' or run_mode == 'morning':
+        header = f"## 🤖 AI量化大盘深度体检\n> **{now_str}**\n\n"
+    elif run_mode not in ('market_only', 'morning') and total_market > 0:
+        total_signals = sum(len(sigs) for sigs in signals.values()) if isinstance(signals, dict) else len(signals)
+        pass_rate = total_signals / max(total_pool, 1) * 100 if total_pool > 0 else 0
+        header += f"**🔬 漏斗数据**：全市场白名单 `{total_market}` 只，异动提取 `{total_pool}` 只，完美过线 `{total_signals}` 只 (优选率 **{pass_rate:.1f}%**)\n\n"
+        
+    if market_msg:
+        header += f"{market_msg}\n\n---\n\n"
+
+    if run_mode == 'morning':
+        # 早盘仅发宏观快报，这里直接用 generate_macro_section 生成极简版
+        content = f"## 🌅 AI量化开盘快报\n> **{now_str}**\n\n" + generate_macro_section() + "\n\n> 🔔 早盘重点监控外围风险，避免开盘盲目冲动。尾盘 14:45 将发送完整选股报告。"
+    elif run_mode == 'market_only':
+        content = header + "✅ 大盘分析播报完毕，本次任务短路了全量个股运算。"
+    elif "接口异常" in market_msg or "网络原因失败" in market_msg:
+        content = header + "⚠️ 今日部分个股数据扫描因接口受限中断，已为您提供核心大盘分析参考。"
+    elif not any(signals.values()) and not watchlist:
+        if not PUSH_EMPTY: return
+        content = f"{header}✅ **系统检测结果**：今日未发现形态完全符合安全边际的标的，建议**空仓防守**。"
+    else:
+        content = header
+        has_any_signal = any(signals.values())
+        
+        if has_any_signal:
+            # Removed subjective cold gate
+            
+            

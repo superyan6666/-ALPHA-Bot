@@ -1,0 +1,548 @@
+{
+    "F_PE_Zscore_252": {
+        "promoted_at": "2026-06-27 09:46:21",
+        "status": "ACTIVE",
+        "history": [
+            {
+                "date": "2026-06-27 09:46:21",
+                "event": "PROMOTED_VIA_PIPELINE"
+            },
+            {
+                "date": "2026-06-27 09:49:30",
+                "event": "PROMOTED_VIA_PIPELINE"
+            },
+            {
+                "date": "2026-06-27 09:49:44",
+                "event": "PROMOTED_VIA_PIPELINE"
+            },
+            {
+                "date": "2026-06-27 09:51:21",
+                "event": "PROMOTED_VIA_PIPELINE"
+            },
+            {
+                "date": "2026-06-27 09:53:13",
+                "event": "PROMOTED_VIA_PIPELINE"
+            },
+            {
+                "date": "2026-06-27 14:52:56",
+                "event": "PROMOTED_VIA_PIPELINE"
+            },
+            {
+                "date": "2026-06-27 15:07:12",
+                "event": "PROMOTED_VIA_PIPELINE"
+            },
+            {
+                "date": "2026-06-27 15:07:31",
+                "event": "PROMOTED_VIA_PIPELINE"
+            }
+        ],
+        "gene_id": null,
+        "gene_label": ""
+    },
+    "F_PE_Yield_Ratio": {
+        "promoted_at": "2026-06-27 09:46:21",
+        "status": "ACTIVE",
+        "history": [
+            {
+                "date": "2026-06-27 09:46:21",
+                "event": "PROMOTED_VIA_PIPELINE"
+            },
+            {
+                "date": "2026-06-27 09:49:30",
+                "event": "PROMOTED_VIA_PIPELINE"
+            },
+            {
+                "date": "2026-06-27 09:49:44",
+                "event": "PROMOTED_VIA_PIPELINE"
+            },
+            {
+                "date": "2026-06-27 09:51:21",
+                "event": "PROMOTED_VIA_PIPELINE"
+            },
+            {
+                "date": "2026-06-27 09:53:13",
+                "event": "PROMOTED_VIA_PIPELINE"
+            },
+            {
+                "date": "2026-06-27 14:52:56",
+                "event": "PROMOTED_VIA_PIPELINE"
+            },
+            {
+                "date": "2026-06-27 15:07:12",
+                "event": "PROMOTED_VIA_PIPELINE"
+            },
+            {
+                "date": "2026-06-27 15:07:31",
+                "event": "PROMOTED_VIA_PIPELINE"
+            }
+        ],
+        "gene_id": null,
+        "gene_label": ""
+    },
+    "F_MACD_DIFF": {
+        "promoted_at": "2026-06-27 09:46:21",
+        "status": "ACTIVE",
+        "history": [
+            {
+                "date": "2026-06-27 09:46:21",
+                "event": "PROMOTED_VIA_PIPELINE"
+            },
+            {
+                "date": "2026-06-27 09:49:30",
+                "event": "PROMOTED_VIA_PIPELINE"
+            },
+            {
+                "date": "2026-06-27 09:49:44",
+                "event": "PROMOTED_VIA_PIPELINE"
+            },
+            {
+                "date": "2026-06-27 09:51:21",
+                "event": "PROMOTED_VIA_PIPELINE"
+            },
+            {
+                "date": "2026-06-27 09:53:13",
+                "event": "PROMOTED_VIA_PIPELINE"
+            },
+            {
+                "date": "2026-06-27 14:52:56",
+                "event": "PROMOTED_VIA_PIPELINE"
+            },
+            {
+                "date": "2026-06-27 15:07:12",
+                "event": "PROMOTED_VIA_PIPELINE"
+            },
+            {
+                "date": "2026-06-27 15:07:31",
+                "event": "PROMOTED_VIA_PIPELINE"
+            }
+        ],
+        "gene_id": null,
+        "gene_label": "",
+        "ortho_weights": {
+            "intercept": 0.14338605621244055,
+            "betas": {
+                "F_PE_Gap_120": 0.9732487668442151
+            }
+        }
+    },
+    "F_VIX_TS": {
+        "promoted_at": "2026-06-27 09:46:21",
+        "status": "ACTIVE",
+        "history": [
+            {
+                "date": "2026-06-27 09:46:21",
+                "event": "PROMOTED_VIA_PIPELINE"
+            },
+            {
+                "date": "2026-06-27 09:49:30",
+                "event": "PROMOTED_VIA_PIPELINE"
+            },
+            {
+                "date": "2026-06-27 09:49:44",
+                "event": "PROMOTED_VIA_PIPELINE"
+            },
+            {
+                "date": "2026-06-27 09:51:21",
+                "event": "PROMOTED_VIA_PIPELINE"
+            },
+            {
+                "date": "2026-06-27 09:53:13",
+                "event": "PROMOTED_VIA_PIPELINE"
+            },
+            {
+                "date": "2026-06-27 14:52:56",
+                "event": "PROMOTED_VIA_PIPELINE"
+            },
+            {
+                "date": "2026-06-27 15:07:12",
+                "event": "PROMOTED_VIA_PIPELINE"
+            },
+            {
+                "date": "2026-06-27 15:07:31",
+                "event": "PROMOTED_VIA_PIPELINE"
+            }
+        ],
+        "gene_id": null,
+        "gene_label": ""
+    },
+    "F_VIX_Momentum_10": {
+        "promoted_at": "2026-06-27 09:46:21",
+        "status": "ACTIVE",
+        "history": [
+            {
+                "date": "2026-06-27 09:46:21",
+                "event": "PROMOTED_VIA_PIPELINE"
+            },
+            {
+                "date": "2026-06-27 09:49:30",
+                "event": "PROMOTED_VIA_PIPELINE"
+            },
+            {
+                "date": "2026-06-27 09:49:44",
+                "event": "PROMOTED_VIA_PIPELINE"
+            },
+            {
+                "date": "2026-06-27 09:51:21",
+                "event": "PROMOTED_VIA_PIPELINE"
+            },
+            {
+                "date": "2026-06-27 09:53:13",
+                "event": "PROMOTED_VIA_PIPELINE"
+            },
+            {
+                "date": "2026-06-27 14:52:56",
+                "event": "PROMOTED_VIA_PIPELINE"
+            },
+            {
+                "date": "2026-06-27 15:07:12",
+                "event": "PROMOTED_VIA_PIPELINE"
+            },
+            {
+                "date": "2026-06-27 15:07:31",
+                "event": "PROMOTED_VIA_PIPELINE"
+            }
+        ],
+        "gene_id": null,
+        "gene_label": ""
+    },
+    "F_VOL_5": {
+        "promoted_at": "2026-06-27 09:46:21",
+        "status": "ACTIVE",
+        "history": [
+            {
+                "date": "2026-06-27 09:46:21",
+                "event": "PROMOTED_VIA_PIPELINE"
+            },
+            {
+                "date": "2026-06-27 09:49:30",
+                "event": "PROMOTED_VIA_PIPELINE"
+            },
+            {
+                "date": "2026-06-27 09:49:44",
+                "event": "PROMOTED_VIA_PIPELINE"
+            },
+            {
+                "date": "2026-06-27 09:51:21",
+                "event": "PROMOTED_VIA_PIPELINE"
+            },
+            {
+                "date": "2026-06-27 09:53:13",
+                "event": "PROMOTED_VIA_PIPELINE"
+            },
+            {
+                "date": "2026-06-27 14:52:56",
+                "event": "PROMOTED_VIA_PIPELINE"
+            },
+            {
+                "date": "2026-06-27 15:07:12",
+                "event": "PROMOTED_VIA_PIPELINE"
+            },
+            {
+                "date": "2026-06-27 15:07:31",
+                "event": "PROMOTED_VIA_PIPELINE"
+            }
+        ],
+        "gene_id": null,
+        "gene_label": ""
+    },
+    "F_MOM_10": {
+        "promoted_at": "2026-06-27 09:46:21",
+        "status": "ACTIVE",
+        "history": [
+            {
+                "date": "2026-06-27 09:46:21",
+                "event": "PROMOTED_VIA_PIPELINE"
+            },
+            {
+                "date": "2026-06-27 09:49:44",
+                "event": "PROMOTED_VIA_PIPELINE"
+            },
+            {
+                "date": "2026-06-27 09:51:21",
+                "event": "PROMOTED_VIA_PIPELINE"
+            },
+            {
+                "date": "2026-06-27 09:53:13",
+                "event": "PROMOTED_VIA_PIPELINE"
+            },
+            {
+                "date": "2026-06-27 14:52:56",
+                "event": "PROMOTED_VIA_PIPELINE"
+            },
+            {
+                "date": "2026-06-27 15:07:12",
+                "event": "PROMOTED_VIA_PIPELINE"
+            },
+            {
+                "date": "2026-06-27 15:07:31",
+                "event": "PROMOTED_VIA_PIPELINE"
+            }
+        ],
+        "gene_id": null,
+        "gene_label": "",
+        "ortho_weights": {
+            "intercept": 0.027576576322907505,
+            "betas": {
+                "F_VP_REV_20": -0.20720862032817056,
+                "F_MOM_20": 2.3715380239760608e-16,
+                "F_VP_REV_5": -0.7020832872577442
+            }
+        }
+    },
+    "F_BIAS_5": {
+        "promoted_at": "2026-06-27 09:46:21",
+        "status": "ACTIVE",
+        "history": [
+            {
+                "date": "2026-06-27 09:46:21",
+                "event": "PROMOTED_VIA_PIPELINE"
+            },
+            {
+                "date": "2026-06-27 09:49:44",
+                "event": "PROMOTED_VIA_PIPELINE"
+            },
+            {
+                "date": "2026-06-27 09:51:21",
+                "event": "PROMOTED_VIA_PIPELINE"
+            },
+            {
+                "date": "2026-06-27 09:53:13",
+                "event": "PROMOTED_VIA_PIPELINE"
+            },
+            {
+                "date": "2026-06-27 14:52:56",
+                "event": "PROMOTED_VIA_PIPELINE"
+            },
+            {
+                "date": "2026-06-27 15:07:12",
+                "event": "PROMOTED_VIA_PIPELINE"
+            },
+            {
+                "date": "2026-06-27 15:07:31",
+                "event": "PROMOTED_VIA_PIPELINE"
+            }
+        ],
+        "gene_id": null,
+        "gene_label": "",
+        "ortho_weights": {
+            "intercept": 0.0011683624646737743,
+            "betas": {
+                "F_VP_REV_5": -0.8386978566729908,
+                "F_MOM_5": -1.1533988840230754e-15
+            }
+        }
+    },
+    "F_VP_REV_5": {
+        "promoted_at": "2026-06-27 09:49:30",
+        "status": "ACTIVE",
+        "history": [
+            {
+                "date": "2026-06-27 09:49:30",
+                "event": "PROMOTED_VIA_PIPELINE"
+            },
+            {
+                "date": "2026-06-27 15:07:12",
+                "event": "PROMOTED_VIA_PIPELINE"
+            },
+            {
+                "date": "2026-06-27 15:07:31",
+                "event": "PROMOTED_VIA_PIPELINE"
+            }
+        ],
+        "gene_id": null,
+        "gene_label": ""
+    },
+    "F_PE_Gap_120": {
+        "promoted_at": "2026-06-27 15:07:12",
+        "status": "ACTIVE",
+        "history": [
+            {
+                "date": "2026-06-27 15:07:12",
+                "event": "PROMOTED_VIA_PIPELINE"
+            },
+            {
+                "date": "2026-06-27 15:07:31",
+                "event": "PROMOTED_VIA_PIPELINE"
+            }
+        ],
+        "gene_id": null,
+        "gene_label": "",
+        "ortho_weights": {
+            "intercept": -0.054773817397842074,
+            "betas": {
+                "F_PE_Zscore_252": 0.7754932969132676
+            }
+        }
+    },
+    "F_ERP": {
+        "promoted_at": "2026-06-27 15:07:12",
+        "status": "ACTIVE",
+        "history": [
+            {
+                "date": "2026-06-27 15:07:12",
+                "event": "PROMOTED_VIA_PIPELINE"
+            },
+            {
+                "date": "2026-06-27 15:07:31",
+                "event": "PROMOTED_VIA_PIPELINE"
+            }
+        ],
+        "gene_id": null,
+        "gene_label": "",
+        "ortho_weights": {
+            "intercept": -0.10256808946894529,
+            "betas": {
+                "F_PE_Zscore_252": -0.627980179035223,
+                "F_PE_Gap_120": -0.1851427429813009,
+                "F_PE_Yield_Ratio": -0.3678438025527438
+            }
+        }
+    },
+    "F_VP_REV_20": {
+        "promoted_at": "2026-06-27 15:07:12",
+        "status": "ACTIVE",
+        "history": [
+            {
+                "date": "2026-06-27 15:07:12",
+                "event": "PROMOTED_VIA_PIPELINE"
+            },
+            {
+                "date": "2026-06-27 15:07:31",
+                "event": "PROMOTED_VIA_PIPELINE"
+            }
+        ],
+        "gene_id": null,
+        "gene_label": "",
+        "ortho_weights": {
+            "intercept": -0.0869131142132671,
+            "betas": {
+                "F_MACD_DIFF": -0.921379407589641
+            }
+        }
+    },
+    "F_MOM_20": {
+        "promoted_at": "2026-06-27 15:07:12",
+        "status": "ACTIVE",
+        "history": [
+            {
+                "date": "2026-06-27 15:07:12",
+                "event": "PROMOTED_VIA_PIPELINE"
+            },
+            {
+                "date": "2026-06-27 15:07:31",
+                "event": "PROMOTED_VIA_PIPELINE"
+            }
+        ],
+        "gene_id": null,
+        "gene_label": "",
+        "ortho_weights": {
+            "intercept": 0.08691311421326721,
+            "betas": {
+                "F_MACD_DIFF": 0.9213794075896415,
+                "F_VP_REV_20": -1.0000000000000009
+            }
+        }
+    },
+    "F_BIAS_20": {
+        "promoted_at": "2026-06-27 15:07:12",
+        "status": "ACTIVE",
+        "history": [
+            {
+                "date": "2026-06-27 15:07:12",
+                "event": "PROMOTED_VIA_PIPELINE"
+            },
+            {
+                "date": "2026-06-27 15:07:31",
+                "event": "PROMOTED_VIA_PIPELINE"
+            }
+        ],
+        "gene_id": null,
+        "gene_label": "",
+        "ortho_weights": {
+            "intercept": 0.04291589721831087,
+            "betas": {
+                "F_MACD_DIFF": 0.3425188898095642,
+                "F_VP_REV_20": -0.44596972809399155,
+                "F_MOM_20": 1.9542338590866522e-16,
+                "F_VP_REV_5": -0.5993128917248944,
+                "F_MOM_10": 0.45361646703714,
+                "F_MOM_5": -1.2459480602285908e-16
+            }
+        }
+    },
+    "F_MOM_5": {
+        "promoted_at": "2026-06-27 15:07:12",
+        "status": "ACTIVE",
+        "history": [
+            {
+                "date": "2026-06-27 15:07:12",
+                "event": "PROMOTED_VIA_PIPELINE"
+            },
+            {
+                "date": "2026-06-27 15:07:31",
+                "event": "PROMOTED_VIA_PIPELINE"
+            }
+        ],
+        "gene_id": null,
+        "gene_label": "",
+        "ortho_weights": {
+            "intercept": 4.555051365380956e-17,
+            "betas": {
+                "F_VP_REV_5": -1.0,
+                "F_MOM_10": -1.3613551048559132e-17
+            }
+        }
+    },
+    "F_BIAS_10": {
+        "promoted_at": "2026-06-27 15:07:12",
+        "status": "ACTIVE",
+        "history": [
+            {
+                "date": "2026-06-27 15:07:12",
+                "event": "PROMOTED_VIA_PIPELINE"
+            },
+            {
+                "date": "2026-06-27 15:07:31",
+                "event": "PROMOTED_VIA_PIPELINE"
+            }
+        ],
+        "gene_id": null,
+        "gene_label": "",
+        "ortho_weights": {
+            "intercept": 0.00814370861395818,
+            "betas": {
+                "F_VP_REV_5": -0.9487936610768406,
+                "F_MOM_10": 0.3466169457799293,
+                "F_MOM_5": -1.2492943173260325e-15,
+                "F_BIAS_20": 0.2870356554479752,
+                "F_BIAS_5": 0.2769885263024446,
+                "F_BOLL_POS_20": 0.03198158580943676
+            }
+        }
+    },
+    "F_BOLL_POS_20": {
+        "promoted_at": "2026-06-27 15:07:12",
+        "status": "ACTIVE",
+        "history": [
+            {
+                "date": "2026-06-27 15:07:12",
+                "event": "PROMOTED_VIA_PIPELINE"
+            },
+            {
+                "date": "2026-06-27 15:07:31",
+                "event": "PROMOTED_VIA_PIPELINE"
+            }
+        ],
+        "gene_id": null,
+        "gene_label": "",
+        "ortho_weights": {
+            "intercept": 0.10281654801965173,
+            "betas": {
+                "F_VP_REV_5": -0.6768844833539347,
+                "F_MOM_10": 0.42134388002034245,
+                "F_MOM_5": -9.30868967294105e-16,
+                "F_BIAS_20": 1.2343153531412645
+            }
+        }
+    }
+}

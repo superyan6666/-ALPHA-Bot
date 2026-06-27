@@ -312,23 +312,123 @@ class SignalTracker:
                 lines.append("")
         
         return '\n'.join(lines)
-    
+
+    def check_degradation_alert(self) -> str | None:
+        """检测近期胜率是否触发退化预警。
+
+        规则：过去 15 个交易日内有 ≥ 20 条 COMPLETE 记录，
+        且 T+20 胜率 < 45%，返回预警文本；否则返回 None。
+        """
+        records = self._load_history()
+        if not records:
+            return None
+
+        df = pd.DataFrame(records)
+        complete = df[df['outcome_status'] == 'COMPLETE'].copy()
+        if complete.empty or 'actual_ret_t20' not in complete.columns:
+            return None
+
+        complete['signal_date'] = pd.to_datetime(complete['signal_date'])
+        cutoff = pd.Timestamp.now() - pd.Timedelta(days=21)  # ≈15 trading days
+        recent = complete[complete['signal_date'] >= cutoff].dropna(subset=['actual_ret_t20'])
+
+        if len(recent) < 20:
+            return None
+
+        win_rate = (recent['actual_ret_t20'] > 0).mean()
+        if win_rate < 0.45:
+            msg = (
+                f"\n🚨 **[系统预警] 实盘模型疑似结构性退化**\n"
+                f"> 近 15 个交易日 T+20 胜率: `{win_rate*100:.1f}%`（< 45% 红线），"
+                f"样本量: {len(recent)} 条\n"
+                f"> 建议：暂停扩仓 + 触发人工复核，"
+                f"或等待 Phase 1 衰减监控自动降权处理老化因子。"
+            )
+            log.warning(f"[SignalTracker] 🚨 退化预警触发！近期胜率={win_rate*100:.1f}%")
+            return msg
+        return None
+
+    def generate_report(self) -> str:
+        """生成信号绩效报告（含退化预警）。"""
+        records = self._load_history()
+        if not records:
+            return "📊 暂无历史信号数据。"
+
+        df = pd.DataFrame(records)
+        total = len(df)
+        complete = len(df[df['outcome_status'] == 'COMPLETE'])
+        pending = len(df[df['outcome_status'] == 'PENDING'])
+
+        lines = [
+            "# 📊 信号绩效体检报告",
+            f"\n**统计时间**: {datetime.now().strftime('%Y-%m-%d %H:%M')}",
+            f"**信号总量**: {total} 条 (完成回填: {complete}, 待回填: {pending})",
+            ""
+        ]
+
+        if complete > 0:
+            completed = df[df['outcome_status'] == 'COMPLETE'].copy()
+
+            for horizon in ['t1', 't5', 't10', 't20']:
+                col = f'actual_ret_{horizon}'
+                if col in completed.columns:
+                    valid = completed[col].dropna()
+                    if len(valid) > 0:
+                        win_rate = (valid > 0).mean() * 100
+                        avg_ret = valid.mean() * 100
+                        lines.append(f"### {horizon.upper()} 周期")
+                        lines.append(f"- 胜率: {win_rate:.1f}% (n={len(valid)})")
+                        lines.append(f"- 平均收益: {avg_ret:.2f}%")
+                        lines.append(f"- 最佳: {valid.max()*100:.2f}% | 最差: {valid.min()*100:.2f}%")
+                        lines.append("")
+
+            # Target/Stop stats
+            if 'hit_target' in completed.columns:
+                ht = completed['hit_target'].dropna()
+                if len(ht) > 0:
+                    lines.append(f"### 止盈止损统计")
+                    lines.append(f"- 触达目标价: {ht.sum()}/{len(ht)} ({ht.mean()*100:.1f}%)")
+                if 'hit_stop' in completed.columns:
+                    hs = completed['hit_stop'].dropna()
+                    if len(hs) > 0:
+                        lines.append(f"- 触达止损线: {hs.sum()}/{len(hs)} ({hs.mean()*100:.1f}%)")
+                lines.append("")
+
+            # Score bucketing — does higher score actually predict better returns?
+            if 'score' in completed.columns and 'actual_ret_t20' in completed.columns:
+                completed['score_bucket'] = pd.cut(completed['score'], bins=[0, 80, 90, 95, 100], labels=['<80', '80-90', '90-95', '95+'])
+                bucket_stats = completed.groupby('score_bucket', observed=True)['actual_ret_t20'].agg(['mean', 'count'])
+                lines.append("### 得分分档 vs T+20 实际收益")
+                lines.append("| 得分区间 | 平均收益 | 样本数 |")
+                lines.append("|---------|---------|-------|")
+                for bucket, row in bucket_stats.iterrows():
+                    lines.append(f"| {bucket} | {row['mean']*100:.2f}% | {int(row['count'])} |")
+                lines.append("")
+
+        # ── [Phase 2-A] 退化预警钩子 ──────────────────────────────────────────
+        alert = self.check_degradation_alert()
+        if alert:
+            lines.append(alert)
+        # ─────────────────────────────────────────────────────────────────────
+
+        return '\n'.join(lines)
+
     def get_training_feedback(self, min_age_days: int = 20) -> pd.DataFrame:
         """导出已完成回填的信号，供未来训练反馈使用。
-        
+
         Returns:
             DataFrame with columns: [code, signal_date, score, actual_ret_t20, excess_ret_t20, ...]
         """
         records = self._load_history()
         if not records:
             return pd.DataFrame()
-        
+
         df = pd.DataFrame(records)
         complete = df[df['outcome_status'] == 'COMPLETE'].copy()
-        
+
         if complete.empty:
             log.info("[SignalTracker] 无已完成信号可供训练反馈。")
             return pd.DataFrame()
-        
+
         log.info(f"[SignalTracker] 导出 {len(complete)} 条已完成信号作为训练反馈。")
         return complete
