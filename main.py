@@ -2619,8 +2619,9 @@ def get_signals() -> tuple[dict[str, list[Signal]], list, set, int, str, int]:
 # ═════════════════════════════════════════════════════════════════════════════
 # 7. Crucible Backtest Engine (VectorBT)
 # ═════════════════════════════════════════════════════════════════════════════
-import vectorbt as vbt
 import gc
+# vectorbt 只在回测时需要，懒加载
+vbt = None
 
 class CrucibleBacktestEngine:
     def __init__(self, initial_capital=1000000, max_trials=30):
@@ -2633,6 +2634,12 @@ class CrucibleBacktestEngine:
         if self.trials_run >= self.max_trials:
             log.error("[CRUCIBLE] Trial budget exceeded (30). Forcing stop to prevent overfitting.")
             return None
+        
+        # 懒加载 vectorbt
+        global vbt
+        if vbt is None:
+            import vectorbt as vbt_module
+            vbt = vbt_module
             
         self.trials_run += 1
         log.info(f"[CRUCIBLE] Running chunked VectorBT backtest. Trial {self.trials_run}/{self.max_trials}")
