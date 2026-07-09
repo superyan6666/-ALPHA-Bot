@@ -1,12 +1,4 @@
 {
-  "300442": {
-    "name": "润泽科技",
-    "entry_date": "2026-06-09",
-    "target": 89.45,
-    "stop": 69.32,
-    "horizon": "T+10",
-    "max_days": 20
-  },
   "301004": {
     "name": "嘉益股份",
     "entry_date": "2026-06-10",
@@ -23,14 +15,6 @@
     "horizon": "T+10",
     "max_days": 20
   },
-  "300065": {
-    "name": "海兰信",
-    "entry_date": "2026-06-12",
-    "target": 25.05,
-    "stop": 15.3,
-    "horizon": "T+10",
-    "max_days": 20
-  },
   "300401": {
     "name": "花园生物",
     "entry_date": "2026-06-12",
@@ -39,43 +23,11 @@
     "horizon": "T+10",
     "max_days": 20
   },
-  "600475": {
-    "name": "华光环能",
-    "entry_date": "2026-06-15",
-    "target": 17.88,
-    "stop": 13.89,
-    "horizon": "T+10",
-    "max_days": 20
-  },
-  "301662": {
-    "name": "宏工科技",
-    "entry_date": "2026-06-15",
-    "target": 112.83,
-    "stop": 85.86,
-    "horizon": "T+10",
-    "max_days": 20
-  },
-  "300763": {
-    "name": "锦浪科技",
-    "entry_date": "2026-06-16",
-    "target": 115.1,
-    "stop": 82.04,
-    "horizon": "T+10",
-    "max_days": 20
-  },
   "000917": {
     "name": "电广传媒",
     "entry_date": "2026-06-19",
     "target": 8.12,
     "stop": 6.53,
-    "horizon": "T+10",
-    "max_days": 20
-  },
-  "600426": {
-    "name": "华鲁恒升",
-    "entry_date": "2026-06-22",
-    "target": 30.95,
-    "stop": 24.8,
     "horizon": "T+10",
     "max_days": 20
   },

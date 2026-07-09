@@ -1,8 +1,10 @@
 import os
 # --- B7 强制防御：绕过失效的本地代理 (如 Clash 10808)，防止单点脆弱 ---
-for k in ['HTTP_PROXY', 'HTTPS_PROXY', 'http_proxy', 'https_proxy', 'ALL_PROXY', 'all_proxy']:
-    os.environ.pop(k, None)
-os.environ['NO_PROXY'] = '*'
+# [TEMP] SANDBOX_MODE=1 时保留代理配置，避免 sandbox 环境网络不可达
+if os.environ.get('SANDBOX_MODE', '') != '1':
+    for k in ['HTTP_PROXY', 'HTTPS_PROXY', 'http_proxy', 'https_proxy', 'ALL_PROXY', 'all_proxy']:
+        os.environ.pop(k, None)
+    os.environ['NO_PROXY'] = '*'
 
 import time
 import json
